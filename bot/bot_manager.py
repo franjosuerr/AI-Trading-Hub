@@ -30,6 +30,7 @@ from utils import (
     SIGNAL_LABEL_ES,
     round_to_precision,
 )
+from email_notifier import send_trade_email
 
 # Backend
 from backend.database import SessionLocal
@@ -369,9 +370,25 @@ async def _run_trading_cycle(exchange, user, config, pairs, order_amounts, user_
             user_logger.warning("Monto no configurado para %s.", pair)
             continue
 
-        # Verificar saldo para venta
+        # Verificar saldo antes de ejecutar la orden
+        balance_now = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
+
+        if signal_data["signal"] == "buy":
+            # Para compra: verificar que hay suficiente quote currency (ej. USDT)
+            free_quote_now = 0.0
+            if balance_now and quote_currency in balance_now:
+                free_quote_now = float(balance_now[quote_currency].get("free", 0) or 0)
+            cost_estimate = amount * current_price if current_price else 0
+            if cost_estimate > 0 and free_quote_now < cost_estimate:
+                user_logger.warning(
+                    "Saldo insuficiente de %s para comprar %s: tienes %.4f, se requiere ~%.4f. Se omite la orden.",
+                    quote_currency, pair, free_quote_now, cost_estimate
+                )
+                errors_this_cycle.append(f"{pair}: saldo insuficiente de {quote_currency} para comprar (~{cost_estimate:.4f} necesarios)")
+                continue
+
         if signal_data["signal"] == "sell":
-            balance_now = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
+            # Para venta: verificar que hay suficiente base currency (ej. SOL)
             free_base_now = 0.0
             if balance_now and base_currency in balance_now:
                 free_base_now = float(balance_now[base_currency].get("free", 0) or 0)
@@ -408,6 +425,21 @@ async def _run_trading_cycle(exchange, user, config, pairs, order_amounts, user_
                 f"Cantidad: {filled} @ {price_exec}\n"
                 f"ID: {order_id}\n💰 Balance: {_format_balance_one_line(balance_after)}"
             ))
+            # Email de notificación del trade
+            await asyncio.to_thread(
+                send_trade_email,
+                to_email=user.email,
+                pair=pair,
+                side=signal_data["signal"],
+                amount=filled,
+                price=float(price_exec) if price_exec else 0.0,
+                order_id=order_id,
+                simulated=simulated,
+                indicators=indicators,
+                balance_after=_format_balance_one_line(balance_after),
+                confidence=signal_data.get("confidence", 0.0),
+                reason=signal_data.get("reason", ""),
+            )
         else:
             errors_this_cycle.append(f"{pair}: fallo al crear orden")
 
