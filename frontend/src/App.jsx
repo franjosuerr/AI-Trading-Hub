@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Users, Activity, Settings, TrendingUp, Play, Square, Plus, Trash2, Bot, X, Save, LogOut, Lock, UserPlus, Shield, BarChart3, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Layout, Users, Activity, Settings, TrendingUp, Play, Square, Plus, Trash2, Bot, X, Save, LogOut, Lock, UserPlus, Shield, BarChart3, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import axios from 'axios';
 import logger from './utils/logger';
@@ -455,6 +455,23 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     catch (error) { alert(error.response?.data?.detail || "Error al guardar configuración"); }
   };
 
+  const downloadLog = async (uid, uname) => {
+    try {
+      const res = await api.get(`/logs/bot/${uid}/download`, { responseType: 'blob' });
+      const today = new Date().toISOString().slice(0, 10);
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'text/plain' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bot_${uname}_${today}.log`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      alert(error.response?.status === 404 ? 'No hay logs disponibles para hoy' : 'Error al descargar logs');
+    }
+  };
+
   return (
     <div>
       {/* ─── Top Bar ─── */}
@@ -533,6 +550,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
 
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={() => { setStatsUserId(user.id); setStatsUserName(user.username); }} className="btn-action" style={{ color: '#00f2ff', borderColor: 'rgba(0,242,255,0.15)' }}><BarChart3 size={15} /> Stats</button>
+                <button onClick={() => downloadLog(user.id, user.username)} className="btn-action" style={{ color: '#ffaa00', borderColor: 'rgba(255,170,0,0.15)' }}><Download size={15} /> Logs</button>
                 <button onClick={() => handleOpenModal(user)} className="btn-primary" style={{ flex: 1, padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><Settings size={14} /> Ajustes</button>
                 {isAdmin && <button onClick={() => handleDelete(user.id)} className="btn-action" style={{ color: '#ff0055', borderColor: 'rgba(255,0,85,0.15)', padding: '8px 10px' }}><Trash2 size={15} /></button>}
               </div>
