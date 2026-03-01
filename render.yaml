@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ai-trading-hub
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt &&
+      cd frontend && npm install && npm run build && cd ..
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: NODE_VERSION
+        value: "20"
+      # Las siguientes variables se configuran en el dashboard de Render:
+      # - COINEX_API_KEY
+      # - COINEX_SECRET
+      # - GROQ_API_KEY (o OPENAI_API_KEY, GOOGLE_API_KEY)
+      # - TELEGRAM_BOT_TOKEN
+      # - TELEGRAM_CHAT_ID
+      # - SECRET_KEY (para JWT)
+    plan: free

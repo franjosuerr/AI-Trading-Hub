@@ -1,0 +1,20 @@
+# Bot de trading CoinEx + IA + Telegram
+# Python 3.10+
+
+ccxt>=4.0.0
+pandas>=2.0.0
+python-dotenv>=1.0.0
+openai>=1.0.0
+requests>=2.28.0
+ta>=0.10.0
+
+# Opcional: para AI_PROVIDER=gemini (Google Gemini)
+google-generativeai>=0.8.0
+
+# Backend API
+fastapi>=0.100.0
+uvicorn>=0.23.0
+sqlalchemy>=2.0.0
+PyJWT>=2.0.0
+bcrypt>=4.0.0
+httpx>=0.24.0

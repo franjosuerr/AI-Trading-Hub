@@ -1,0 +1,40 @@
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Entorno virtual
+venv/
+.venv/
+env/
+
+# Variables de entorno (credenciales sensibles)
+.env
+
+# Bases de datos
+*.db
+data/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/build/
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
