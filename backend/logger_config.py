@@ -1,22 +1,33 @@
 import logging
 import os
 import glob
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from logging.handlers import TimedRotatingFileHandler
 
 LOG_DIR = "logs"
 BOT_LOG_DIR = os.path.join(LOG_DIR, "bots")
+
+def colombia_converter(timestamp):
+    """Convierte un timestamp a hora de Colombia (UTC-5)."""
+    # Crear datetime en UTC desde el timestamp
+    dt = datetime.fromtimestamp(timestamp, timezone.utc)
+    # Restar 5 horas para Colombia
+    col_dt = dt - timedelta(hours=5)
+    return col_dt.timetuple()
 
 # --- Formato compartido ---
 FORMATTER = logging.Formatter(
     '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+FORMATTER.converter = colombia_converter
 
 CONSOLE_FORMATTER = logging.Formatter(
     '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s',
     datefmt='%H:%M:%S'
 )
+CONSOLE_FORMATTER.converter = colombia_converter
 
 
 def _ensure_dirs():

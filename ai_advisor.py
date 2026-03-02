@@ -49,6 +49,7 @@ def build_prompt(
     portfolio_context: Optional[dict] = None,
     stop_loss_percent: Optional[float] = None,
     num_pairs: int = 1,
+    recent_signals: Optional[list] = None,
 ) -> str:
     """
     Construye el prompt para la IA con par, timeframe, últimas velas OHLCV,
@@ -150,45 +151,164 @@ def build_prompt(
     if stop_loss_percent is not None and stop_loss_percent > 0:
         risk_block = f"\nStop-loss configurado al {stop_loss_percent}%; sé conservador con el riesgo a la baja.\n"
 
-    return f"""Analiza el par {pair} (timeframe: {timeframe}) con los siguientes datos de mercado y toma una decisión de trading.
+    # --- Bloque de historial de señales recientes ---
+    signal_history_block = ""
+    if recent_signals and len(recent_signals) > 0:
+        hist_lines = ["\n**Historial de señales recientes (ciclos anteriores):**"]
+        for i, sig in enumerate(reversed(recent_signals[-5:]), 1):
+            sig_label = {"buy": "COMPRAR", "sell": "VENDER", "hold": "MANTENER"}.get(sig.get("signal", ""), sig.get("signal", ""))
+            price_str = f" @ {sig['price']:.2f}" if sig.get("price") else ""
+            hist_lines.append(
+                f"  - Hace {i} ciclo(s): {sig_label} (confianza {sig.get('confidence', 0):.2f}){price_str} — {sig.get('reason', '')[:80]}"
+            )
+        recent_buys = sum(1 for s in recent_signals[-5:] if s.get("signal") == "buy")
+        recent_sells = sum(1 for s in recent_signals[-5:] if s.get("signal") == "sell")
+        recent_holds = sum(1 for s in recent_signals[-5:] if s.get("signal") == "hold")
+        hist_lines.append(f"  Resumen últimos {len(recent_signals[-5:])} ciclos: {recent_buys} compras, {recent_sells} ventas, {recent_holds} mantener")
+        if recent_buys >= 3:
+            hist_lines.append(f"  ⚠️ ALERTA: Ya compraste {recent_buys} veces en los últimos ciclos. NO sigas comprando a menos que el precio haya caído >3% desde tu última compra.")
+        signal_history_block = "\n".join(hist_lines) + "\n"
+
+    # --- Bloque de análisis pre-calculado (datos objetivos para la IA) ---
+    analysis_items = []
+    rsi = indicators.get("rsi")
+    if rsi is not None:
+        if rsi > 70:
+            analysis_items.append(f"  - RSI={rsi:.1f} → SOBRECOMPRA (señal de venta)")
+        elif rsi > 60:
+            analysis_items.append(f"  - RSI={rsi:.1f} → Zona alta (precaución, cerca de sobrecompra)")
+        elif rsi < 30:
+            analysis_items.append(f"  - RSI={rsi:.1f} → SOBREVENTA (posible oportunidad de compra)")
+        elif rsi < 45:
+            analysis_items.append(f"  - RSI={rsi:.1f} → Zona baja (posible oportunidad)")
+        else:
+            analysis_items.append(f"  - RSI={rsi:.1f} → Zona NEUTRAL (NO es señal de compra por sí solo)")
+
+    bb_upper = indicators.get("bb_upper")
+    bb_lower = indicators.get("bb_lower")
+    if bb_upper and bb_lower and current_price:
+        bb_range = bb_upper - bb_lower
+        if bb_range > 0:
+            bb_pct = (current_price - bb_lower) / bb_range * 100
+            analysis_items.append(f"  - Posición en Bollinger: {bb_pct:.0f}% (0%=banda inferior, 50%=medio, 100%=banda superior)")
+            if bb_pct > 80:
+                analysis_items.append(f"    → Precio CERCA DE BANDA SUPERIOR: señal de posible venta")
+            elif bb_pct < 20:
+                analysis_items.append(f"    → Precio CERCA DE BANDA INFERIOR: posible zona de compra si otros indicadores confirman")
+            else:
+                analysis_items.append(f"    → Precio en zona MEDIA de Bollinger: NO es señal de compra ni venta por Bollinger")
+
+    sma200 = indicators.get("sma200")
+    sma50 = indicators.get("sma50")
+    if current_price and sma200:
+        diff_200 = (current_price - sma200) / sma200 * 100
+        analysis_items.append(f"  - Precio vs SMA200: {diff_200:+.2f}% ({'por encima' if diff_200 > 0 else 'por debajo'})")
+    if current_price and sma50:
+        diff_50 = (current_price - sma50) / sma50 * 100
+        analysis_items.append(f"  - Precio vs SMA50: {diff_50:+.2f}% ({'por encima' if diff_50 > 0 else 'por debajo'})")
+    if sma50 and sma200:
+        if sma50 > sma200:
+            analysis_items.append("  - SMA50 > SMA200: Golden Cross (tendencia alcista)")
+        else:
+            analysis_items.append("  - SMA50 < SMA200: Death Cross (tendencia bajista — precaución)")
+
+    macd_hist = indicators.get("macd_histogram")
+    if macd_hist is not None:
+        if macd_hist > 0:
+            analysis_items.append(f"  - MACD histograma: +{macd_hist:.4f} (momentum positivo)")
+        else:
+            analysis_items.append(f"  - MACD histograma: {macd_hist:.4f} (momentum negativo)")
+
+    vol = indicators.get("volume")
+    vol_avg = indicators.get("volume_avg")
+    if vol is not None and vol_avg is not None and vol_avg > 0:
+        vol_ratio = vol / vol_avg
+        analysis_items.append(f"  - Volumen vs promedio: {vol_ratio:.2f}x {'(ALTO — confirma fuerza)' if vol_ratio > 1.5 else '(BAJO — sin fuerza)' if vol_ratio < 0.5 else '(normal)'}")
+
+    if holdings > 0 and avg_entry > 0 and current_price:
+        entry_diff = (current_price - avg_entry) / avg_entry * 100
+        analysis_items.append(f"  - Precio actual vs tu entrada: {entry_diff:+.2f}% {'(GANANCIA)' if entry_diff > 0 else '(PÉRDIDA)'}")
+        if entry_diff > 1.5:
+            analysis_items.append(f"    → Ganancia > 1.5%: Considera tomar beneficios parciales (VENDER 25-50%)")
+        elif entry_diff < -(stop_loss_percent or 2.0):
+            analysis_items.append(f"    → Pérdida supera stop-loss ({stop_loss_percent or 2.0}%): Considera VENDER para proteger capital")
+
+    analysis_block = ""
+    if analysis_items:
+        analysis_block = "\n**Análisis pre-calculado (datos objetivos — NO los ignores):**\n" + "\n".join(analysis_items) + "\n"
+
+    return f"""Analiza el par {pair} (timeframe: {timeframe}) y toma una decisión de trading basándote ESTRICTAMENTE en los datos y reglas siguientes.
 {price_block}
 **Últimas {prompt_candles} velas (OHLCV):**
 {candles_text}
 {context_block}
 **Indicadores técnicos actuales:**
 {indicators_block}
+{analysis_block}
 {portfolio_block}
 {balance_instruction}
+{signal_history_block}
 {risk_block}
-**MÉTODO DE ANÁLISIS (sigue estos pasos en orden):**
+**PROCESO DE DECISIÓN PASO A PASO (sigue este orden ESTRICTAMENTE):**
 
-1. **Tendencia general:** ¿El precio está por encima o debajo de SMA200? ¿SMA50 está por encima o debajo de SMA200? (Golden/Death Cross)
-2. **Momentum:** ¿El histograma MACD es positivo/negativo y creciente/decreciente? ¿Hay divergencia entre precio y MACD?
-3. **Sobrecompra/Sobreventa:** ¿RSI > 70 (sobrecompra) o RSI < 30 (sobreventa)? ¿RSI entre 40-60 (neutral)?
-4. **Volatilidad:** ¿El precio está cerca de las bandas de Bollinger? ¿Las bandas se están expandiendo o contrayendo?
-5. **Volumen:** ¿El volumen actual es mayor o menor que el promedio? (Confirma la fuerza del movimiento)
-6. **Acción de precio:** Analiza las últimas velas OHLCV. ¿Hay patrones de reversión o continuación?
+PASO 1 — EVALÚA TU POSICIÓN ACTUAL:
+- ¿Tienes {base_currency} en tu portafolio?
+  → SÍ: Tu opción por DEFECTO es MANTENER. Solo cambia si los pasos siguientes lo indican claramente.
+  → NO: Evalúa si es buena oportunidad de entrada en el Paso 2.
 
-**REGLAS DE DECISIÓN (necesitas al menos 3 confirmaciones):**
-- COMPRA (buy): Tendencia alcista (precio > SMA200 o cruzando hacia arriba), MACD creciente, RSI entre 30-65, volumen creciente, precio cerca de banda inferior de Bollinger o rebotando de soporte. **IMPORTANTE: Si ya tienes posición abierta, necesitas al menos 4 confirmaciones fuertes para comprar más. No acumules posiciones solo porque la tendencia es "alcista" — necesitas una razón específica y diferente al ciclo anterior.**
-- VENTA (sell): Tendencia bajista o señales de reversión, RSI > 70, MACD decreciente, precio cerca de banda superior de Bollinger, volumen decreciente en subida. Pondera tu ganancia/pérdida actual al decidir. **Si tienes ganancias > 1%, considera tomar beneficios parciales.**
-- MANTENER (hold): Cuando las condiciones no han cambiado significativamente desde la última señal, cuando ya tienes posición abierta y no hay señal fuerte nueva, o cuando los indicadores son mixtos. **MANTENER es la opción CORRECTA cuando ya tienes posición y el mercado está lateral o sin cambios claros. NO compres en cada ciclo solo porque hay tendencia alcista general.**
+PASO 2 — CONDICIONES DE COMPRA (primera compra, SIN posición abierta):
+Necesitas que se cumplan AL MENOS 3 de estas 4 condiciones:
+  □ RSI < 45 (no está en zona neutral-alta ni sobrecomprada)
+  □ MACD histograma positivo Y creciente (momentum alcista confirmado)
+  □ Precio en la mitad inferior del rango de Bollinger (posición Bollinger < 40%)
+  □ Precio por encima de SMA200 (tendencia alcista de fondo)
+Si se cumplen 4/4: confianza 0.80-0.90 | Si 3/4: confianza 0.70-0.80 | Si <3: señal MANTENER
+Monto: máximo 30% del {quote_currency} disponible. Distribúyelo entre {num_pairs} pares.
 
-**ANTI-SOBRE-TRADING (MUY IMPORTANTE):**
-- Si ya tienes posición abierta y los indicadores no han cambiado drásticamente, la señal correcta es MANTENER (hold).
-- NO compres repetidamente solo porque RSI está entre 30-65 y MACD es positivo — eso describe mercado "normal", no una oportunidad de compra.
-- Una compra adicional (DCA) solo se justifica si el precio ha bajado significativamente (>2%) desde tu precio promedio de compra, creando una oportunidad real de mejorar tu entrada.
+PASO 3 — COMPRA ADICIONAL / DCA (si YA tienes posición):
+⚠️ ES MUY DIFÍCIL JUSTIFICAR COMPRAR MÁS. Solo si se cumplen TODAS estas condiciones:
+  □ Precio actual está >3% POR DEBAJO de tu precio promedio de compra
+  □ RSI < 35 (sobreventa real, no solo zona baja)
+  □ MACD muestra señales claras de reversión alcista (histograma cambiando de negativo a positivo)
+  □ No has comprado en los últimos 3 ciclos (revisa tu historial de señales)
+Si NO se cumplen las 4: la señal DEBE ser MANTENER. No compres solo porque la tendencia es alcista.
 
-**GESTIÓN DE CAPITAL (OBLIGATORIO):**
-- COMPRA: Indica "amount_usdt" (cuántos {quote_currency} invertir). Máximo 30% de tu {quote_currency} disponible ({free_quote:.4f}). No compres si tu balance es < 5 {quote_currency}. Diversifica: monitoreas {num_pairs} pares.
-- Alta confianza (>0.85): hasta 25-30% del balance. Media (0.7-0.85): 10-20%. Baja: no compres.
-- VENTA: Indica "sell_percentage" (1-100) de tu posición ({holdings:.8f} {base_currency}). Venta parcial para asegurar ganancias, total si tendencia es claramente bajista.
+PASO 4 — CONDICIONES DE VENTA (si tienes posición):
+Necesitas AL MENOS 2 de estas condiciones:
+  □ Ganancia actual ≥ 1.5% sobre tu precio promedio de compra
+  □ RSI > 60 y mostrando tendencia decreciente
+  □ MACD histograma cambiando de positivo a negativo (pérdida de momentum)
+  □ Precio tocando o superando la banda superior de Bollinger (posición Bollinger > 80%)
+  □ Volumen decreciente en las últimas velas (señal de agotamiento alcista)
+  □ Precio cayó por debajo de SMA50 (pérdida de soporte a corto plazo)
+Porcentajes de venta:
+  - Ganancia 1.5-3%: vende 25-40% de la posición
+  - Ganancia >3%: vende 40-70% de la posición
+  - Pérdida >{stop_loss_percent or 2.0}%: vende 100% (stop-loss obligatorio)
+  - RSI > 75: vende 30-50% (sobrecompra extrema)
+
+PASO 5 — PROTECCIÓN OBLIGATORIA (si tienes posición, estas anulan todo lo anterior):
+  □ Pérdida actual > {stop_loss_percent or 2.0}% → VENDER 100% inmediatamente
+  □ RSI > 75 → VENDER al menos 30%
+  □ Death Cross (SMA50 < SMA200) → VENDER al menos 50%
+
+**REGLA ANTI-SOBRE-TRADING (CRÍTICA — lee esto con atención):**
+- Si ya tienes posición y el mercado está en zona neutral (RSI 45-60, sin cambios bruscos): MANTENER.
+- NO compres solo porque "precio > SMA200 y MACD positivo" — esas son condiciones de mercado NORMAL, NO señales de compra.
+- Revisa tu historial de señales arriba: si ya compraste recientemente, la señal correcta es MANTENER salvo un cambio MUY claro.
+- Una compra se justifica por un CAMBIO significativo, no por condiciones estáticas favorables.
+- En caso de duda entre comprar y mantener: MANTENER es SIEMPRE la opción más segura.
+
+**GESTIÓN DE CAPITAL:**
+- COMPRA: "amount_usdt" = cuántos {quote_currency} invertir. Máximo 30% de {free_quote:.4f} disponible.
+- No compres si tu balance es < 5 {quote_currency}.
+- VENTA: "sell_percentage" (1-100) de tu posición ({holdings:.8f} {base_currency}).
 - MANTENER: No incluyas montos.
 
 Responde ÚNICAMENTE con un objeto JSON válido (sin texto adicional):
-- Comprar: {{"signal": "buy", "confidence": <0.0-1.0>, "reason": "<análisis técnico conciso en español>", "amount_usdt": <monto>}}
-- Vender: {{"signal": "sell", "confidence": <0.0-1.0>, "reason": "<análisis técnico conciso en español>", "sell_percentage": <1-100>}}
-- Mantener: {{"signal": "hold", "confidence": <0.0-1.0>, "reason": "<análisis técnico conciso en español>"}}"""
+- Comprar: {{"signal": "buy", "confidence": <0.0-1.0>, "reason": "<lista de condiciones cumplidas del checklist>", "amount_usdt": <monto>}}
+- Vender: {{"signal": "sell", "confidence": <0.0-1.0>, "reason": "<lista de condiciones cumplidas del checklist>", "sell_percentage": <1-100>}}
+- Mantener: {{"signal": "hold", "confidence": <0.0-1.0>, "reason": "<por qué no se cumplen las condiciones de compra ni venta>"}}"""
 
 
 def _extract_json_from_response(content: str) -> Optional[dict]:
@@ -299,6 +419,7 @@ def get_ai_signal(
     stop_loss_percent: Optional[float] = None,
     num_pairs: int = 1,
     ai_config: Optional[dict] = None,
+    recent_signals: Optional[list] = None,
 ) -> Optional[dict]:
     """
     Envía el prompt a la IA configurada (OpenAI, Groq, Gemini u Ollama), parsea la respuesta
@@ -320,6 +441,7 @@ def get_ai_signal(
         portfolio_context=portfolio_context,
         stop_loss_percent=stop_loss_percent,
         num_pairs=num_pairs,
+        recent_signals=recent_signals,
     )
 
     # Resolver configuración de IA: parámetro directo o módulo config

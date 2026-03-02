@@ -37,6 +37,55 @@ from backend.logger_config import get_logger, get_user_bot_logger
 
 logger = get_logger("bot_manager")
 
+# --- Historial de señales por (user_id, pair) para contexto de la IA ---
+_signal_history: Dict[tuple, list] = defaultdict(list)
+MAX_SIGNAL_HISTORY = 10
+
+# --- Balance virtual para modo test (persiste durante la sesión del bot) ---
+_virtual_balances: Dict[int, Dict[str, float]] = {}
+
+
+def _init_virtual_balance(user_id: int, exchange_balance: dict):
+    """Inicializa el balance virtual a partir del balance real del exchange (para test mode)."""
+    vb = {}
+    if exchange_balance:
+        for cur, data in exchange_balance.items():
+            if isinstance(data, dict):
+                vb[cur] = float(data.get("total", 0) or 0)
+    _virtual_balances[user_id] = vb
+    logger.info("Balance virtual inicializado para usuario %d: %s", user_id,
+                ", ".join(f"{k}={v:.4f}" for k, v in vb.items() if v > 0))
+
+
+def _update_virtual_balance(user_id: int, side: str, pair: str, amount: float, price: float):
+    """Actualiza el balance virtual después de un trade simulado."""
+    if user_id not in _virtual_balances:
+        return
+    base = pair.split("/")[0] if "/" in pair else pair
+    quote = pair.split("/")[1] if "/" in pair else "USDT"
+    vb = _virtual_balances[user_id]
+    if side == "buy":
+        cost = amount * price
+        vb[quote] = vb.get(quote, 0) - cost
+        vb[base] = vb.get(base, 0) + amount
+    elif side == "sell":
+        revenue = amount * price
+        vb[quote] = vb.get(quote, 0) + revenue
+        vb[base] = max(0.0, vb.get(base, 0) - amount)
+
+
+def _get_effective_balance(user_id: int, exchange_balance: dict, test_mode: bool) -> dict:
+    """Retorna balance virtual en test mode, balance real en producción."""
+    if not test_mode or user_id not in _virtual_balances:
+        return exchange_balance or {}
+    vb = _virtual_balances[user_id]
+    result = {}
+    for cur, amount in vb.items():
+        val = max(0.0, amount)
+        if val > 0.000001:
+            result[cur] = {"free": val, "used": 0.0, "total": val}
+    return result if result else exchange_balance or {}
+
 
 # ─── Utilidades de exchange (inline, para no depender de config.py) ───
 
@@ -375,6 +424,11 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     _log_balance_full(user_logger, balance_start, "Balance al inicio del ciclo")
     balance_summary_start = _format_balance_one_line(balance_start)
 
+    # Balance efectivo (virtual en test mode, real en producción)
+    balance_effective = _get_effective_balance(user.id, balance_start, test_mode)
+    if test_mode:
+        user_logger.info("Balance virtual: %s", _format_balance_one_line(balance_effective))
+
     signals_for_telegram = []
     orders_this_cycle = []
     errors_this_cycle = []
@@ -418,7 +472,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         base_currency = pair.split("/")[0] if "/" in pair else pair
         quote_currency = pair.split("/")[1] if "/" in pair else "USDT"
         portfolio_ctx = await asyncio.to_thread(
-            _get_portfolio_for_pair, user.id, pair, balance_start, current_price, user_logger
+            _get_portfolio_for_pair, user.id, pair, balance_effective, current_price, user_logger
         )
 
         # 4. Señal de la IA — pasar config directamente (thread-safe, sin importlib.reload)
@@ -428,12 +482,23 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             portfolio_context=portfolio_ctx, stop_loss_percent=stop_loss,
             num_pairs=len(pairs),
             ai_config=ai_config,
+            recent_signals=_signal_history.get((user.id, pair), []),
         )
 
         if signal_data is None:
             user_logger.warning("No se pudo obtener señal IA para %s.", pair)
             errors_this_cycle.append(f"{pair}: sin señal IA")
             continue
+
+        # Guardar señal en historial para contexto futuro
+        _signal_history[(user.id, pair)].append({
+            "signal": signal_data["signal"],
+            "confidence": signal_data["confidence"],
+            "reason": signal_data.get("reason", "")[:100],
+            "price": current_price,
+        })
+        if len(_signal_history[(user.id, pair)]) > MAX_SIGNAL_HISTORY:
+            _signal_history[(user.id, pair)] = _signal_history[(user.id, pair)][-MAX_SIGNAL_HISTORY:]
 
         # Log de señal con montos decididos por la IA
         amount_info = ""
@@ -466,7 +531,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             user_logger.info("Sin orden: confianza %.2f < umbral %.2f para %s.", signal_data["confidence"], confidence_threshold, pair)
             continue
 
-        # Verificar límite de trades diarios por par
+        # Verificar límite de trades diarios por par (solo bloquea COMPRAS, ventas siempre permitidas)
         try:
             db = SessionLocal()
             try:
@@ -478,24 +543,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 ).count()
             finally:
                 db.close()
-            if trades_today >= max_trades:
+            if trades_today >= max_trades and signal_data["signal"] == "buy":
                 user_logger.info(
-                    "Límite diario alcanzado para %s: %d/%d trades hoy. Se omite.",
+                    "Límite diario de COMPRAS alcanzado para %s: %d/%d trades hoy. Ventas aún permitidas.",
                     pair, trades_today, max_trades
                 )
                 continue
         except Exception as e:
             user_logger.warning("Error al verificar límite diario: %s", str(e)[:100])
 
-        # COOLDOWN: No operar si ya hubo trades recientes en este par (evita sobre-compra post-reinicio)
-        cooldown_minutes = max(int((config.interval or 300) / 60), 5)  # Al menos 5 minutos o el intervalo del ciclo
+        # COOLDOWN: Evitar compras en ciclos consecutivos (mínimo 15 minutos o 3x el intervalo)
+        cooldown_minutes = max(int((config.interval or 300) / 60) * 3, 15)
         if signal_data["signal"] == "buy":
             if await asyncio.to_thread(_check_recent_trades_cooldown, user.id, pair, cooldown_minutes, user_logger):
                 continue
 
             # LÍMITE DE INVERSIÓN TOTAL: No comprar si ya tienes >70% del portafolio invertido
             invested_pct = await asyncio.to_thread(
-                _get_total_invested_percentage, user.id, pairs, balance_start, exchange, user_logger
+                _get_total_invested_percentage, user.id, pairs, balance_effective, exchange, user_logger
             )
             if invested_pct >= 70.0:
                 user_logger.warning(
@@ -508,6 +573,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         # Calcular monto dinámico decidido por la IA
         amount = 0.0
         balance_now = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
+        balance_now_effective = _get_effective_balance(user.id, balance_now, test_mode)
 
         if signal_data["signal"] == "buy":
             # La IA decide cuántos USDT invertir → convertir a moneda base
@@ -517,10 +583,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 errors_this_cycle.append(f"{pair}: monto IA inválido para compra")
                 continue
 
-            # Verificar saldo real de USDT antes de comprar
+            # Verificar saldo (virtual en test mode, real en producción)
             free_quote_now = 0.0
-            if balance_now and quote_currency in balance_now:
-                free_quote_now = float(balance_now[quote_currency].get("free", 0) or 0)
+            if balance_now_effective and quote_currency in balance_now_effective:
+                free_quote_now = float(balance_now_effective[quote_currency].get("free", 0) or 0)
 
             # SEGURIDAD: mínimo 5 USDT de balance para operar (como dice el prompt)
             if free_quote_now < 5.0:
@@ -567,8 +633,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             # La IA decide qué porcentaje de la posición vender
             sell_pct = signal_data.get("sell_percentage", 100)
             free_base_now = 0.0
-            if balance_now and base_currency in balance_now:
-                free_base_now = float(balance_now[base_currency].get("free", 0) or 0)
+            if balance_now_effective and base_currency in balance_now_effective:
+                free_base_now = float(balance_now_effective[base_currency].get("free", 0) or 0)
 
             if free_base_now <= 0:
                 user_logger.warning("No tienes %s para vender (saldo=0).", base_currency)
@@ -636,6 +702,13 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     db.close()
             except Exception as e:
                 user_logger.warning("Error al guardar trade en DB: %s", str(e)[:150])
+
+            # Actualizar balance virtual (solo en test mode)
+            if test_mode:
+                _update_virtual_balance(user.id, signal_data["signal"], pair, trade_amount, trade_price)
+                user_logger.info("Balance virtual actualizado: %s", _format_balance_one_line(
+                    _get_effective_balance(user.id, balance_now, test_mode)
+                ))
 
             # Telegram para la orden
             balance_after = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
@@ -776,6 +849,10 @@ class BotManager:
         # Balance al arranque
         balance_at_start = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
         _log_balance_full(user_logger, balance_at_start, "Balance al arranque")
+
+        # Inicializar balance virtual para modo test
+        if test_mode:
+            _init_virtual_balance(user_id, balance_at_start)
 
         # Telegram de arranque
         try:
