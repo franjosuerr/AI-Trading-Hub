@@ -237,78 +237,72 @@ def build_prompt(
     if analysis_items:
         analysis_block = "\n**Análisis pre-calculado (datos objetivos — NO los ignores):**\n" + "\n".join(analysis_items) + "\n"
 
-    return f"""Analiza el par {pair} (timeframe: {timeframe}) y toma una decisión de trading basándote ESTRICTAMENTE en los datos y reglas siguientes.
-{price_block}
-**Últimas {prompt_candles} velas (OHLCV):**
-{candles_text}
-{context_block}
-**Indicadores técnicos actuales:**
+    # --- Prompt Profesional y Estructurado (Estilo Chain-of-Thought) ---
+
+    return f"""You are a strict, risk-averse Institutional Crypto Trading Algorithm.
+Your goal is CAPITAL PRESERVATION first, profit second.
+You DO NOT hallucinate. You act ONLY on the provided data.
+If indicators are neutral or conflicting, the DEFAULT action is HOLD.
+
+### 1. MARKET DATA (FACTS - DO NOT IGNORE)
+- **Pair**: {pair} (Timeframe: {timeframe})
+- **Current Price**: {current_price}
+- **Indicators**:
 {indicators_block}
 {analysis_block}
+
+### 2. PORTFOLIO STATE (FACTS)
+- **Base Asset ({base_currency}) Holdings**: {holdings:.8f}
 {portfolio_block}
 {balance_instruction}
+
+### 3. RECENT ACTIVITY
 {signal_history_block}
 {risk_block}
-**PROCESO DE DECISIÓN PASO A PASO (sigue este orden ESTRICTAMENTE):**
 
-PASO 1 — EVALÚA TU POSICIÓN ACTUAL:
-- ¿Tienes {base_currency} en tu portafolio?
-  → SÍ: Tu opción por DEFECTO es MANTENER. Solo cambia si los pasos siguientes lo indican claramente.
-  → NO: Evalúa si es buena oportunidad de entrada en el Paso 2.
+### 4. TRADING RULES (EXECUTE IN ORDER)
 
-PASO 2 — CONDICIONES DE COMPRA (primera compra, SIN posición abierta):
-Necesitas que se cumplan AL MENOS 3 de estas 4 condiciones:
-  □ RSI < 45 (no está en zona neutral-alta ni sobrecomprada)
-  □ MACD histograma positivo Y creciente (momentum alcista confirmado)
-  □ Precio en la mitad inferior del rango de Bollinger (posición Bollinger < 40%)
-  □ Precio por encima de SMA200 (tendencia alcista de fondo)
-Si se cumplen 4/4: confianza 0.80-0.90 | Si 3/4: confianza 0.70-0.80 | Si <3: señal MANTENER
-Monto: máximo 30% del {quote_currency} disponible. Distribúyelo entre {num_pairs} pares.
+**PHASE A: VERIFICATION (Sanity Check)**
+1. **RSI Check**: 
+   - If RSI > 60: YOU CANNOT BUY. (Exception: None).
+   - If RSI < 30: Strong Buy Zone.
+2. **Trend Check**:
+   - Price < SMA200: Bearish Trend. CAUTION on buys.
+   - Price > SMA200: Bullish Trend. Safer for buys.
 
-PASO 3 — COMPRA ADICIONAL / DCA (si YA tienes posición):
-⚠️ ES MUY DIFÍCIL JUSTIFICAR COMPRAR MÁS. Solo si se cumplen TODAS estas condiciones:
-  □ Precio actual está >3% POR DEBAJO de tu precio promedio de compra
-  □ RSI < 35 (sobreventa real, no solo zona baja)
-  □ MACD muestra señales claras de reversión alcista (histograma cambiando de negativo a positivo)
-  □ No has comprado en los últimos 3 ciclos (revisa tu historial de señales)
-Si NO se cumplen las 4: la señal DEBE ser MANTENER. No compres solo porque la tendencia es alcista.
+**PHASE B: DECISION LOGIC**
 
-PASO 4 — CONDICIONES DE VENTA (si tienes posición):
-Necesitas AL MENOS 2 de estas condiciones:
-  □ Ganancia actual ≥ 1.5% sobre tu precio promedio de compra
-  □ RSI > 60 y mostrando tendencia decreciente
-  □ MACD histograma cambiando de positivo a negativo (pérdida de momentum)
-  □ Precio tocando o superando la banda superior de Bollinger (posición Bollinger > 80%)
-  □ Volumen decreciente en las últimas velas (señal de agotamiento alcista)
-  □ Precio cayó por debajo de SMA50 (pérdida de soporte a corto plazo)
-Porcentajes de venta:
-  - Ganancia 1.5-3%: vende 25-40% de la posición
-  - Ganancia >3%: vende 40-70% de la posición
-  - Pérdida >{stop_loss_percent or 2.0}%: vende 100% (stop-loss obligatorio)
-  - RSI > 75: vende 30-50% (sobrecompra extrema)
+**SCENARIO 1: NO POSITION (Holdings = 0)**
+*Goal: Find a high-probability entry.*
+- **BUY SIGNAL** requires AT LEAST 3 of these:
+  1. RSI < 45 (Not Overbought)
+  2. MACD Histogram > 0 AND Increasing (Momentum)
+  3. Price near Lower Bollinger Band (< 30% position)
+  4. Volume > Average Volume
+- **IF NOT MET**: SIGNAL = HOLD.
 
-PASO 5 — PROTECCIÓN OBLIGATORIA (si tienes posición, estas anulan todo lo anterior):
-  □ Pérdida actual > {stop_loss_percent or 2.0}% → VENDER 100% inmediatamente
-  □ RSI > 75 → VENDER al menos 30%
-  □ Death Cross (SMA50 < SMA200) → VENDER al menos 50%
+**SCENARIO 2: HAVE POSITION (Holdings > 0)**
+*Goal: Manage risk and take profit.*
+- **SELL SIGNAL** requires ANY of these:
+  1. **Stop Loss**: PnL < -{stop_loss_percent or 2.0}% (MANDATORY SELL)
+  2. **Take Profit**: PnL > 1.5% AND (RSI > 70 OR Price > Upper BB)
+  3. **Trend Reversal**: MACD falls below Signal Line OR Price falls below SMA50.
+- **DCA (Add to position)** ONLY if:
+  1. PnL < -3% AND RSI < 30 AND Reversal Confirmed. (Very Rare).
+- **IF NOT MET**: SIGNAL = HOLD.
 
-**REGLA ANTI-SOBRE-TRADING (CRÍTICA — lee esto con atención):**
-- Si ya tienes posición y el mercado está en zona neutral (RSI 45-60, sin cambios bruscos): MANTENER.
-- NO compres solo porque "precio > SMA200 y MACD positivo" — esas son condiciones de mercado NORMAL, NO señales de compra.
-- Revisa tu historial de señales arriba: si ya compraste recientemente, la señal correcta es MANTENER salvo un cambio MUY claro.
-- Una compra se justifica por un CAMBIO significativo, no por condiciones estáticas favorables.
-- En caso de duda entre comprar y mantener: MANTENER es SIEMPRE la opción más segura.
+### 5. REQUIRED OUTPUT FORMAT
+Response must be a SINGLE JSON object with this exact structure. 
+"reason" must explicitly cite the numbers (e.g. "RSI is 75.4 which is > 60").
 
-**GESTIÓN DE CAPITAL:**
-- COMPRA: "amount_usdt" = cuántos {quote_currency} invertir. Máximo 30% de {free_quote:.4f} disponible.
-- No compres si tu balance es < 5 {quote_currency}.
-- VENTA: "sell_percentage" (1-100) de tu posición ({holdings:.8f} {base_currency}).
-- MANTENER: No incluyas montos.
-
-Responde ÚNICAMENTE con un objeto JSON válido (sin texto adicional):
-- Comprar: {{"signal": "buy", "confidence": <0.0-1.0>, "reason": "<lista de condiciones cumplidas del checklist>", "amount_usdt": <monto>}}
-- Vender: {{"signal": "sell", "confidence": <0.0-1.0>, "reason": "<lista de condiciones cumplidas del checklist>", "sell_percentage": <1-100>}}
-- Mantener: {{"signal": "hold", "confidence": <0.0-1.0>, "reason": "<por qué no se cumplen las condiciones de compra ni venta>"}}"""
+{{
+  "signal": "buy" | "sell" | "hold",
+  "confidence": 0.0 to 1.0,
+  "reason": "Step-by-step logic citing specific indicator values",
+  "amount_usdt": (for buy: max 30% of available USDT),
+  "sell_percentage": (for sell: 1-100)
+}}
+"""
 
 
 def _extract_json_from_response(content: str) -> Optional[dict]:
