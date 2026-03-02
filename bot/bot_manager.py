@@ -531,6 +531,37 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             user_logger.info("Sin orden: confianza %.2f < umbral %.2f para %s.", signal_data["confidence"], confidence_threshold, pair)
             continue
 
+        # --- FILTROS DE SANIDAD (Anti-Alucinaciones) ---
+        # 1. Bloqueo de compras con RSI alto (evita comprar picos)
+        # ----------------------------------------------------
+        curr_rsi = indicators.get("rsi")
+        if signal_data["signal"] == "buy" and curr_rsi is not None and curr_rsi > 60:
+            user_logger.warning("⛔ COMPRA BLOQUEADA POR RIESGO: RSI=%.2f (>60). La IA está ignorando sobrecompra.", curr_rsi)
+            # Solo permitimos comprar con RSI alto si es "DCA extremo" (promediando a la baja precio muy lejano), pero por defecto bloqueamos.
+            errors_this_cycle.append(f"{pair}: Compra bloqueada (RSI {curr_rsi:.1f} > 60)")
+            continue
+
+        # 2. Bloqueo de ventas por "pánico falso" (Verificar P&L real)
+        # ----------------------------------------------------
+        if signal_data["signal"] == "sell":
+            reason_lower = signal_data.get("reason", "").lower()
+            # Si el motivo es pérdida/stop-loss, verificamos que sea real y significativa
+            if "pérdida" in reason_lower or "loss" in reason_lower or "stop" in reason_lower:
+                # portfolio_ctx tiene la info real
+                # Ejemplo de portfolio_ctx: {'holdings': ..., 'pnl_percent': -0.45, ...}
+                real_pnl = portfolio_ctx.get("pnl_percent", 0.0)
+                sl_limit = -(stop_loss or 2.0) # default -2.0%
+                
+                # Si la pérdida es pequeña (ej. -0.5%) y el límite es -2.0%, NO vender por pánico
+                if real_pnl > sl_limit: 
+                    # Pero CUIDADO: si el RSI está explotando (>75), tal vez sí hay que vender.
+                    if curr_rsi is not None and curr_rsi > 75:
+                        user_logger.info("Venta permitida por RSI extremo (%.1f) aunque P&L sea pequeño (%.2f%%).", curr_rsi, real_pnl)
+                    else:
+                        user_logger.warning("⛔ VENTA BLOQUEADA: IA dice 'Pérdida' pero P&L actual es %.2f%% (Stop-Loss es %.1f%%). Falsa alarma.", real_pnl, sl_limit)
+                        errors_this_cycle.append(f"{pair}: Venta pánico bloqueada (P&L {real_pnl:.2f}%)")
+                        continue
+
         # Verificar límite de trades diarios por par (solo bloquea COMPRAS, ventas siempre permitidas)
         try:
             db = SessionLocal()
