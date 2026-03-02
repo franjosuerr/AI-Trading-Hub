@@ -189,23 +189,27 @@ def _get_portfolio_for_pair(user_id, pair, exchange_balance, current_price, log)
 
     try:
         db = SessionLocal()
-        trades = db.query(Trade).filter(
-            Trade.user_id == user_id,
-            Trade.pair == pair
-        ).order_by(Trade.timestamp.asc()).all()  # cronológico
-        db.close()
+        try:
+            trades = db.query(Trade).filter(
+                Trade.user_id == user_id,
+                Trade.pair == pair
+            ).order_by(Trade.timestamp.asc()).all()  # cronológico
 
-        for t in trades:
-            if t.side == "buy":
-                net_position += t.amount
-                net_cost += t.amount * t.price
+            # Materializar datos antes de cerrar sesión
+            trades_data = [(t.side, t.amount, t.price) for t in trades]
+        finally:
+            db.close()
+
+        for t_side, t_amount, t_price in trades_data:
+            if t_side == "buy":
+                net_position += t_amount
+                net_cost += t_amount * t_price
                 total_buys += 1
-            elif t.side == "sell":
+            elif t_side == "sell":
                 if net_position > 0:
-                    # Reducir costo proporcionalmente al vender
-                    sell_ratio = min(t.amount / net_position, 1.0)
+                    sell_ratio = min(t_amount / net_position, 1.0)
                     net_cost *= (1.0 - sell_ratio)
-                    net_position = max(0.0, net_position - t.amount)
+                    net_position = max(0.0, net_position - t_amount)
                 total_sells += 1
     except Exception as e:
         log.warning("Error al obtener historial de trades para %s: %s", pair, str(e)[:100])
@@ -267,6 +271,72 @@ def _send_telegram_for_user(user, text, tg_logger=None):
     except Exception as e:
         log.warning("Telegram: error inesperado al enviar: %s", str(e)[:150])
         return False
+
+
+# ─── Utilidad: cooldown post-reinicio ───
+
+def _check_recent_trades_cooldown(user_id: int, pair: str, cooldown_minutes: int, log) -> bool:
+    """Retorna True si hay trades recientes dentro del cooldown y NO se debe operar."""
+    try:
+        db = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+            recent = db.query(Trade).filter(
+                Trade.user_id == user_id,
+                Trade.pair == pair,
+                Trade.timestamp >= cutoff,
+            ).count()
+        finally:
+            db.close()
+        if recent > 0:
+            log.info(
+                "Cooldown activo para %s: %d trade(s) en los últimos %d minutos. Se omite.",
+                pair, recent, cooldown_minutes
+            )
+            return True
+        return False
+    except Exception as e:
+        log.warning("Error al verificar cooldown para %s: %s", pair, str(e)[:100])
+        return False
+
+
+def _get_total_invested_percentage(user_id: int, pairs: list, exchange_balance: dict, exchange, log) -> float:
+    """Calcula el porcentaje del portafolio total que ya está invertido (no en USDT)."""
+    try:
+        if not exchange_balance:
+            return 0.0
+
+        # USDT libre
+        free_usdt = 0.0
+        if "USDT" in exchange_balance and isinstance(exchange_balance["USDT"], dict):
+            free_usdt = float(exchange_balance["USDT"].get("total", 0) or 0)
+
+        # Valor de las posiciones en USDT
+        invested_value = 0.0
+        for pair in pairs:
+            base = pair.split("/")[0] if "/" in pair else pair
+            if base in exchange_balance and isinstance(exchange_balance[base], dict):
+                base_amount = float(exchange_balance[base].get("total", 0) or 0)
+                if base_amount > 0:
+                    try:
+                        ticker = exchange.fetch_ticker(pair)
+                        price = float(ticker.get("last", 0))
+                        invested_value += base_amount * price
+                    except Exception:
+                        pass
+
+        total_value = free_usdt + invested_value
+        if total_value <= 0:
+            return 0.0
+        pct = (invested_value / total_value) * 100
+        log.info(
+            "Portafolio total: %.4f USDT libre + %.4f USDT invertido = %.4f USDT total (%.1f%% invertido)",
+            free_usdt, invested_value, total_value, pct
+        )
+        return pct
+    except Exception as e:
+        log.warning("Error al calcular % invertido: %s", str(e)[:100])
+        return 0.0
 
 
 # ─── Ciclo de trading completo (por usuario) ───
@@ -399,13 +469,15 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         # Verificar límite de trades diarios por par
         try:
             db = SessionLocal()
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            trades_today = db.query(Trade).filter(
-                Trade.user_id == user.id,
-                Trade.pair == pair,
-                Trade.timestamp >= today_start,
-            ).count()
-            db.close()
+            try:
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                trades_today = db.query(Trade).filter(
+                    Trade.user_id == user.id,
+                    Trade.pair == pair,
+                    Trade.timestamp >= today_start,
+                ).count()
+            finally:
+                db.close()
             if trades_today >= max_trades:
                 user_logger.info(
                     "Límite diario alcanzado para %s: %d/%d trades hoy. Se omite.",
@@ -414,6 +486,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 continue
         except Exception as e:
             user_logger.warning("Error al verificar límite diario: %s", str(e)[:100])
+
+        # COOLDOWN: No operar si ya hubo trades recientes en este par (evita sobre-compra post-reinicio)
+        cooldown_minutes = max(int((config.interval or 300) / 60), 5)  # Al menos 5 minutos o el intervalo del ciclo
+        if signal_data["signal"] == "buy":
+            if await asyncio.to_thread(_check_recent_trades_cooldown, user.id, pair, cooldown_minutes, user_logger):
+                continue
+
+            # LÍMITE DE INVERSIÓN TOTAL: No comprar si ya tienes >70% del portafolio invertido
+            invested_pct = await asyncio.to_thread(
+                _get_total_invested_percentage, user.id, pairs, balance_start, exchange, user_logger
+            )
+            if invested_pct >= 70.0:
+                user_logger.warning(
+                    "Portafolio ya %.1f%% invertido (>70%%). No se compra más %s. Esperando señales de venta.",
+                    invested_pct, pair
+                )
+                errors_this_cycle.append(f"{pair}: portafolio >70% invertido, compra bloqueada")
+                continue
 
         # Calcular monto dinámico decidido por la IA
         amount = 0.0
@@ -524,22 +614,26 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             })
 
             # Guardar trade en la DB para tracking de portafolio
+            trade_amount = float(filled) if filled else float(amount)
+            trade_price = float(price_exec) if price_exec else (current_price or 0.0)
             try:
                 db = SessionLocal()
-                new_trade = Trade(
-                    user_id=user.id,
-                    pair=pair,
-                    side=signal_data["signal"],
-                    amount=float(filled) if filled else float(amount),
-                    price=float(price_exec) if price_exec else (current_price or 0.0),
-                    order_id=str(order_id),
-                    simulated=simulated,
-                    profit=0.0,
-                )
-                db.add(new_trade)
-                db.commit()
-                db.close()
-                user_logger.info("Trade guardado en DB: %s %s %.8f @ %.6f", signal_data["signal"], pair, new_trade.amount, new_trade.price)
+                try:
+                    new_trade = Trade(
+                        user_id=user.id,
+                        pair=pair,
+                        side=signal_data["signal"],
+                        amount=trade_amount,
+                        price=trade_price,
+                        order_id=str(order_id),
+                        simulated=simulated,
+                        profit=0.0,
+                    )
+                    db.add(new_trade)
+                    db.commit()
+                    user_logger.info("Trade guardado en DB: %s %s %.8f @ %.6f", signal_data["signal"], pair, trade_amount, trade_price)
+                finally:
+                    db.close()
             except Exception as e:
                 user_logger.warning("Error al guardar trade en DB: %s", str(e)[:150])
 
@@ -646,15 +740,18 @@ class BotManager:
     async def _run_bot_loop_inner(self, user_id: int):
         # Setup inicial
         db = SessionLocal()
-        user = db.query(User).filter(User.id == user_id).first()
-        config = db.query(GlobalConfig).first()
-        db.close()
-
-        if not user or not config:
-            logger.error(f"Configuración no encontrada para usuario {user_id}. Abortando.")
-            return
-
-        username = user.username
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            config = db.query(GlobalConfig).first()
+            if not user or not config:
+                logger.error(f"Configuración no encontrada para usuario {user_id}. Abortando.")
+                return
+            # Materializar datos antes de cerrar sesión
+            username = user.username
+            _user_api_key = user.coinex_api_key
+            _user_secret = user.coinex_secret
+        finally:
+            db.close()
         user_logger = get_user_bot_logger(user_id, username)
 
         # Parsear config
@@ -702,9 +799,11 @@ class BotManager:
 
                 # Recargar config desde la DB en cada ciclo
                 db = SessionLocal()
-                user = db.query(User).filter(User.id == user_id).first()
-                config = db.query(GlobalConfig).first()
-                db.close()
+                try:
+                    user = db.query(User).filter(User.id == user_id).first()
+                    config = db.query(GlobalConfig).first()
+                finally:
+                    db.close()
 
                 if not user or not config:
                     user_logger.error("Configuración no encontrada. Cerrando bucle.")
