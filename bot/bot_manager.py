@@ -11,7 +11,6 @@ que escribe a  logs/bots/user_{id}.log
 import asyncio
 import time
 import os
-import importlib
 import requests
 from typing import Dict, Optional
 from datetime import datetime, timedelta
@@ -26,7 +25,6 @@ from ai_advisor import get_ai_signal
 from utils import (
     format_candles_for_prompt,
     format_context_summary,
-    get_order_amount_for_pair,
     SIGNAL_LABEL_ES,
     round_to_precision,
 )
@@ -34,7 +32,7 @@ from email_notifier import send_trade_email
 
 # Backend
 from backend.database import SessionLocal
-from backend.models.models import User, GlobalConfig
+from backend.models.models import User, GlobalConfig, Trade
 from backend.logger_config import get_logger, get_user_bot_logger
 
 logger = get_logger("bot_manager")
@@ -168,19 +166,78 @@ def _parse_pairs(pairs_str: str) -> list:
     return [p.strip() for p in pairs_str.split(",") if p.strip()]
 
 
-def _parse_order_amounts(amounts_str: str) -> dict:
-    result = {}
-    if not amounts_str:
-        return result
-    for item in amounts_str.split(","):
-        item = item.strip()
-        if ":" in item:
-            pair, amount = item.split(":", 1)
-            try:
-                result[pair.strip()] = float(amount.strip())
-            except ValueError:
-                pass
-    return result
+def _get_portfolio_for_pair(user_id, pair, exchange_balance, current_price, log):
+    """Obtiene contexto de portafolio para un par: holdings reales + historial de trades + P&L."""
+    base = pair.split("/")[0] if "/" in pair else pair
+    quote = pair.split("/")[1] if "/" in pair else "USDT"
+
+    # Holdings reales del exchange
+    holdings = 0.0
+    if exchange_balance and base in exchange_balance and isinstance(exchange_balance[base], dict):
+        holdings = float(exchange_balance[base].get("free", 0) or 0)
+
+    free_quote = 0.0
+    if exchange_balance and quote in exchange_balance and isinstance(exchange_balance[quote], dict):
+        free_quote = float(exchange_balance[quote].get("free", 0) or 0)
+
+    # Historial de trades para calcular costo promedio (método de posición neta)
+    # Recorre trades cronológicamente y simula la posición acumulada
+    net_position = 0.0  # unidades base acumuladas
+    net_cost = 0.0      # costo total acumulado en quote
+    total_buys = 0
+    total_sells = 0
+
+    try:
+        db = SessionLocal()
+        trades = db.query(Trade).filter(
+            Trade.user_id == user_id,
+            Trade.pair == pair
+        ).order_by(Trade.timestamp.asc()).all()  # cronológico
+        db.close()
+
+        for t in trades:
+            if t.side == "buy":
+                net_position += t.amount
+                net_cost += t.amount * t.price
+                total_buys += 1
+            elif t.side == "sell":
+                if net_position > 0:
+                    # Reducir costo proporcionalmente al vender
+                    sell_ratio = min(t.amount / net_position, 1.0)
+                    net_cost *= (1.0 - sell_ratio)
+                    net_position = max(0.0, net_position - t.amount)
+                total_sells += 1
+    except Exception as e:
+        log.warning("Error al obtener historial de trades para %s: %s", pair, str(e)[:100])
+
+    # Precio promedio de compra basado en posición neta actual
+    avg_entry_price = net_cost / net_position if net_position > 0 else 0.0
+
+    # Calcular P&L
+    invested_value = holdings * avg_entry_price if holdings > 0 and avg_entry_price > 0 else 0.0
+    current_value = holdings * current_price if holdings > 0 and current_price else 0.0
+    pnl_usdt = current_value - invested_value if invested_value > 0 else 0.0
+    pnl_pct = ((current_price - avg_entry_price) / avg_entry_price * 100) if avg_entry_price > 0 and current_price else 0.0
+
+    portfolio = {
+        "base": base,
+        "quote": quote,
+        "holdings": holdings,
+        "free_quote": free_quote,
+        "avg_entry_price": avg_entry_price,
+        "invested_value": invested_value,
+        "current_value": current_value,
+        "pnl_usdt": pnl_usdt,
+        "pnl_pct": pnl_pct,
+        "total_trades_buy": total_buys,
+        "total_trades_sell": total_sells,
+    }
+
+    log.info(
+        "Portafolio %s: holdings=%.8f, precio_promedio=%.6f, invertido=%.4f, valor_actual=%.4f, P&L=%.4f (%.2f%%), USDT_libre=%.4f",
+        pair, holdings, avg_entry_price, invested_value, current_value, pnl_usdt, pnl_pct, free_quote
+    )
+    return portfolio
 
 
 def _send_telegram_for_user(user, text, tg_logger=None):
@@ -214,8 +271,8 @@ def _send_telegram_for_user(user, text, tg_logger=None):
 
 # ─── Ciclo de trading completo (por usuario) ───
 
-async def _run_trading_cycle(exchange, user, config, pairs, order_amounts, user_logger, cycle_count):
-    """Ejecuta un ciclo completo de trading: Balance → Pares → IA → Órdenes → Telegram."""
+async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_count):
+    """Ejecuta un ciclo completo de trading: Balance → Portafolio → IA (decide monto) → Órdenes → Telegram."""
 
     test_mode = config.test_mode if config.test_mode is not None else True
     timeframe = config.timeframe or "15m"
@@ -287,63 +344,37 @@ async def _run_trading_cycle(exchange, user, config, pairs, order_amounts, user_
         if current_price is not None:
             user_logger.info("Precio actual (ticker) %s: %s", pair, current_price)
 
-        # Balance hint para la IA
+        # Contexto de portafolio para la IA (holdings, costo, P&L)
         base_currency = pair.split("/")[0] if "/" in pair else pair
         quote_currency = pair.split("/")[1] if "/" in pair else "USDT"
-        free_base = 0.0
-        free_quote = 0.0
-        if balance_start:
-            if base_currency in balance_start and isinstance(balance_start[base_currency], dict):
-                free_base = float(balance_start[base_currency].get("free", 0) or 0)
-            if quote_currency in balance_start and isinstance(balance_start[quote_currency], dict):
-                free_quote = float(balance_start[quote_currency].get("free", 0) or 0)
-        balance_hint = f"{quote_currency}: {free_quote:.4f}, {base_currency}: {free_base:.6f}"
-
-        # 4. Señal de la IA — configurar variables de entorno temporalmente
-        old_env = {}
-        env_overrides = {
-            "AI_PROVIDER": ai_config["provider"],
-            "OPENAI_API_KEY": ai_config["openai_api_key"],
-            "GROQ_API_KEY": ai_config["groq_api_key"],
-            "GOOGLE_API_KEY": ai_config["google_api_key"],
-            "OLLAMA_HOST": ai_config["ollama_host"],
-            "OPENAI_MODEL": ai_config["openai_model"],
-            "GROQ_MODEL": ai_config["groq_model"],
-            "GEMINI_MODEL": ai_config["gemini_model"],
-            "OLLAMA_MODEL": ai_config["ollama_model"],
-        }
-        for k, v in env_overrides.items():
-            old_env[k] = os.environ.get(k)
-            os.environ[k] = v
-
-        # Recargar config para que ai_advisor use los valores correctos
-        import config as cfg_module
-        import ai_advisor as ai_module
-        importlib.reload(cfg_module)
-        importlib.reload(ai_module)
-
-        signal_data = ai_module.get_ai_signal(
-            pair, timeframe, candles_text, indicators, prompt_candles,
-            context_summary, current_price=current_price,
-            balance_hint=balance_hint, stop_loss_percent=stop_loss,
+        portfolio_ctx = await asyncio.to_thread(
+            _get_portfolio_for_pair, user.id, pair, balance_start, current_price, user_logger
         )
 
-        # Restaurar variables de entorno
-        for k, v in old_env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+        # 4. Señal de la IA — pasar config directamente (thread-safe, sin importlib.reload)
+        signal_data = get_ai_signal(
+            pair, timeframe, candles_text, indicators, prompt_candles,
+            context_summary, current_price=current_price,
+            portfolio_context=portfolio_ctx, stop_loss_percent=stop_loss,
+            num_pairs=len(pairs),
+            ai_config=ai_config,
+        )
 
         if signal_data is None:
             user_logger.warning("No se pudo obtener señal IA para %s.", pair)
             errors_this_cycle.append(f"{pair}: sin señal IA")
             continue
 
+        # Log de señal con montos decididos por la IA
+        amount_info = ""
+        if signal_data["signal"] == "buy" and "amount_usdt" in signal_data:
+            amount_info = f" | monto_usdt={signal_data['amount_usdt']:.4f}"
+        elif signal_data["signal"] == "sell" and "sell_percentage" in signal_data:
+            amount_info = f" | vender={signal_data['sell_percentage']:.1f}%"
         user_logger.info(
-            "Señal IA: señal=%s confianza=%s razón=%s",
+            "Señal IA: señal=%s confianza=%s%s razón=%s",
             SIGNAL_LABEL_ES.get(signal_data["signal"], signal_data["signal"]),
-            signal_data["confidence"], signal_data["reason"]
+            signal_data["confidence"], amount_info, signal_data["reason"]
         )
 
         # Datos para Telegram
@@ -365,40 +396,114 @@ async def _run_trading_cycle(exchange, user, config, pairs, order_amounts, user_
             user_logger.info("Sin orden: confianza %.2f < umbral %.2f para %s.", signal_data["confidence"], confidence_threshold, pair)
             continue
 
-        amount = get_order_amount_for_pair(pair, order_amounts)
-        if amount <= 0:
-            user_logger.warning("Monto no configurado para %s.", pair)
-            continue
+        # Verificar límite de trades diarios por par
+        try:
+            db = SessionLocal()
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            trades_today = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.pair == pair,
+                Trade.timestamp >= today_start,
+            ).count()
+            db.close()
+            if trades_today >= max_trades:
+                user_logger.info(
+                    "Límite diario alcanzado para %s: %d/%d trades hoy. Se omite.",
+                    pair, trades_today, max_trades
+                )
+                continue
+        except Exception as e:
+            user_logger.warning("Error al verificar límite diario: %s", str(e)[:100])
 
-        # Verificar saldo antes de ejecutar la orden
+        # Calcular monto dinámico decidido por la IA
+        amount = 0.0
         balance_now = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
 
         if signal_data["signal"] == "buy":
-            # Para compra: verificar que hay suficiente quote currency (ej. USDT)
+            # La IA decide cuántos USDT invertir → convertir a moneda base
+            amount_usdt = signal_data.get("amount_usdt", 0)
+            if amount_usdt <= 0 or not current_price or current_price <= 0:
+                user_logger.warning("La IA no especificó monto válido para comprar %s (amount_usdt=%.4f).", pair, amount_usdt)
+                errors_this_cycle.append(f"{pair}: monto IA inválido para compra")
+                continue
+
+            # Verificar saldo real de USDT antes de comprar
             free_quote_now = 0.0
             if balance_now and quote_currency in balance_now:
                 free_quote_now = float(balance_now[quote_currency].get("free", 0) or 0)
-            cost_estimate = amount * current_price if current_price else 0
-            if cost_estimate > 0 and free_quote_now < cost_estimate:
+
+            # SEGURIDAD: mínimo 5 USDT de balance para operar (como dice el prompt)
+            if free_quote_now < 5.0:
                 user_logger.warning(
-                    "Saldo insuficiente de %s para comprar %s: tienes %.4f, se requiere ~%.4f. Se omite la orden.",
-                    quote_currency, pair, free_quote_now, cost_estimate
+                    "Balance %s insuficiente: %.4f < 5.0 mínimo. No se compra %s.",
+                    quote_currency, free_quote_now, pair
                 )
-                errors_this_cycle.append(f"{pair}: saldo insuficiente de {quote_currency} para comprar (~{cost_estimate:.4f} necesarios)")
+                errors_this_cycle.append(f"{pair}: balance {quote_currency} < 5")
                 continue
 
-        if signal_data["signal"] == "sell":
-            # Para venta: verificar que hay suficiente base currency (ej. SOL)
+            # SEGURIDAD: forzar el límite de 30% del balance disponible (no confiar solo en la IA)
+            max_allowed = free_quote_now * 0.30
+            if amount_usdt > max_allowed:
+                user_logger.warning(
+                    "IA sugirió %.4f %s (%.1f%% del balance) — limitando a 30%%: %.4f %s.",
+                    amount_usdt, quote_currency,
+                    (amount_usdt / free_quote_now * 100) if free_quote_now > 0 else 0,
+                    max_allowed, quote_currency,
+                )
+                amount_usdt = max_allowed
+
+            # Limitar al saldo disponible real (segunda capa de seguridad)
+            if amount_usdt > free_quote_now * 0.95:
+                user_logger.warning(
+                    "Monto %.4f excede 95%% del saldo. Ajustando a %.4f %s.",
+                    amount_usdt, free_quote_now * 0.95, quote_currency
+                )
+                amount_usdt = free_quote_now * 0.95  # dejar 5% de margen para fees
+
+            if amount_usdt < 1.0:
+                user_logger.warning("Monto insuficiente para comprar %s: %.4f %s. Mínimo ~1 USDT.", pair, amount_usdt, quote_currency)
+                errors_this_cycle.append(f"{pair}: saldo insuficiente ({amount_usdt:.4f} {quote_currency})")
+                continue
+
+            # Convertir USDT a moneda base
+            amount = amount_usdt / current_price
+            user_logger.info(
+                "Compra validada: %.4f %s en %s → %.8f %s al precio %.6f (%.1f%% del balance)",
+                amount_usdt, quote_currency, pair, amount, base_currency, current_price,
+                (amount_usdt / free_quote_now * 100) if free_quote_now > 0 else 0,
+            )
+
+        elif signal_data["signal"] == "sell":
+            # La IA decide qué porcentaje de la posición vender
+            sell_pct = signal_data.get("sell_percentage", 100)
             free_base_now = 0.0
             if balance_now and base_currency in balance_now:
                 free_base_now = float(balance_now[base_currency].get("free", 0) or 0)
-            if free_base_now < amount:
-                user_logger.warning(
-                    "Saldo insuficiente de %s para vender: tienes %s, se requiere %s. Se omite la orden.",
-                    base_currency, free_base_now, amount
-                )
-                errors_this_cycle.append(f"{pair}: saldo insuficiente de {base_currency} para vender")
+
+            if free_base_now <= 0:
+                user_logger.warning("No tienes %s para vender (saldo=0).", base_currency)
+                errors_this_cycle.append(f"{pair}: sin {base_currency} para vender")
                 continue
+
+            amount = free_base_now * (sell_pct / 100.0)
+            if amount <= 0:
+                user_logger.warning("Monto de venta calculado es 0 para %s.", pair)
+                continue
+
+            # Verificar que el valor de la venta sea significativo (>= 1 USDT)
+            sell_value_usdt = amount * current_price if current_price else 0
+            if sell_value_usdt < 1.0:
+                user_logger.warning(
+                    "Venta de %.8f %s vale solo %.4f USDT (< 1 USDT mínimo). Se omite %s.",
+                    amount, base_currency, sell_value_usdt, pair
+                )
+                errors_this_cycle.append(f"{pair}: venta < 1 USDT")
+                continue
+
+            user_logger.info(
+                "Venta validada: %.1f%% de %s → %.8f %s (de %.8f disponibles, valor ~%.2f USDT)",
+                sell_pct, pair, amount, base_currency, free_base_now, sell_value_usdt,
+            )
 
         user_logger.info("Ejecutando orden: %s %s cantidad=%s (market)", signal_data["signal"], pair, amount)
         order = await asyncio.to_thread(_create_order, exchange, pair, signal_data["signal"], amount, "market", test_mode, user_logger)
@@ -417,6 +522,27 @@ async def _run_trading_cycle(exchange, user, config, pairs, order_amounts, user_
                 "pair": pair, "side": signal_data["signal"], "amount": filled,
                 "price": price_exec, "order_id": order_id, "simulated": simulated,
             })
+
+            # Guardar trade en la DB para tracking de portafolio
+            try:
+                db = SessionLocal()
+                new_trade = Trade(
+                    user_id=user.id,
+                    pair=pair,
+                    side=signal_data["signal"],
+                    amount=float(filled) if filled else float(amount),
+                    price=float(price_exec) if price_exec else (current_price or 0.0),
+                    order_id=str(order_id),
+                    simulated=simulated,
+                    profit=0.0,
+                )
+                db.add(new_trade)
+                db.commit()
+                db.close()
+                user_logger.info("Trade guardado en DB: %s %s %.8f @ %.6f", signal_data["signal"], pair, new_trade.amount, new_trade.price)
+            except Exception as e:
+                user_logger.warning("Error al guardar trade en DB: %s", str(e)[:150])
+
             # Telegram para la orden
             balance_after = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
             await asyncio.to_thread(_send_telegram_for_user, user, (
@@ -533,7 +659,6 @@ class BotManager:
 
         # Parsear config
         pairs = _parse_pairs(config.pairs or "SOL/USDT,ETH/USDT")
-        order_amounts = _parse_order_amounts(config.order_amount_per_pair or "")
         test_mode = config.test_mode if config.test_mode is not None else True
         interval = config.interval or 300
 
@@ -587,12 +712,11 @@ class BotManager:
 
                 # Actualizar parámetros dinámicos
                 pairs = _parse_pairs(config.pairs or "SOL/USDT,ETH/USDT")
-                order_amounts = _parse_order_amounts(config.order_amount_per_pair or "")
                 interval = config.interval or 300
 
                 try:
                     await _run_trading_cycle(
-                        exchange, user, config, pairs, order_amounts, user_logger, cycle_count
+                        exchange, user, config, pairs, user_logger, cycle_count
                     )
                 except Exception as e:
                     user_logger.exception("Error en ciclo de trading #%d: %s", cycle_count, e)

@@ -51,22 +51,6 @@ PROMPT_CANDLES = int(os.getenv("PROMPT_CANDLES", "10"))
 # --- Umbral de confianza (0-1): solo ejecutar orden si confidence >= este valor ---
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.7"))
 
-# --- Monto por orden por par ---
-# Formato env: "BTC/USDT:0.001,ETH/USDT:0.01,SOL/USDT:1" (base amount)
-# O un valor fijo en quote: ORDER_AMOUNT_QUOTE=10 (opcional, ver utils)
-ORDER_AMOUNT_PER_PAIR_STR = os.getenv("ORDER_AMOUNT_PER_PAIR", "BTC/USDT:0.001,ETH/USDT:0.01,SOL/USDT:1")
-ORDER_AMOUNT_PER_PAIR = {}
-for item in ORDER_AMOUNT_PER_PAIR_STR.split(","):
-    item = item.strip()
-    if ":" in item:
-        pair, amount = item.split(":", 1)
-        ORDER_AMOUNT_PER_PAIR[pair.strip()] = float(amount.strip())
-    else:
-        break
-# Si no hay mapeo, usar un default por par conocido
-if not ORDER_AMOUNT_PER_PAIR:
-    ORDER_AMOUNT_PER_PAIR = {"BTC/USDT": 0.001, "ETH/USDT": 0.01, "SOL/USDT": 1.0}
-
 # --- Intervalo entre ciclos completos de análisis (segundos) ---
 INTERVAL = int(os.getenv("INTERVAL", "300"))
 
