@@ -109,6 +109,10 @@ def build_prompt(
         portfolio_block = "\n".join(portfolio_lines) + "\n"
 
         # Instrucciones inteligentes según estado del portafolio
+        invested_pct_of_balance = 0.0
+        if free_quote > 0 and invested > 0:
+            invested_pct_of_balance = (invested / (free_quote + invested)) * 100
+
         if holdings <= 0 or holdings < 0.000001:
             balance_instruction = (
                 f"\n**REGLA DE SALDO:** No tienes {base_currency} (posición vacía). "
@@ -116,11 +120,28 @@ def build_prompt(
                 f"Si tienes {quote_currency} disponible y la oportunidad es buena, "
                 f"busca oportunidades de COMPRA.\n"
             )
-        elif holdings > 0 and pnl_pct < -stop_loss_percent if stop_loss_percent else False:
+        elif holdings > 0 and invested_pct_of_balance > 50:
+            balance_instruction = (
+                f"\n**⚠️ ALERTA - POSICIÓN GRANDE:** Ya tienes {holdings:.8f} {base_currency} "
+                f"(~{invested:.2f} {quote_currency}, {invested_pct_of_balance:.1f}% de tu capital total en este par). "
+                f"Tu {quote_currency} libre es solo {free_quote:.4f}. "
+                f"NO compres más a menos que haya una señal EXTREMADAMENTE fuerte (confianza > 0.90). "
+                f"Considera MANTENER o VENDER parcialmente si hay ganancias. "
+                f"Prioriza proteger el capital existente.\n"
+            )
+        elif holdings > 0 and pnl_pct < -(stop_loss_percent or 2.0):
             balance_instruction = (
                 f"\n**ALERTA DE RIESGO:** Tu posición en {base_currency} está en pérdida ({pnl_pct:+.2f}%). "
                 f"Evalúa seriamente si conviene vender para cortar pérdidas (stop-loss) "
                 f"o si los indicadores muestran recuperación.\n"
+            )
+        elif holdings > 0:
+            balance_instruction = (
+                f"\n**NOTA:** Ya tienes posición abierta en {base_currency} ({holdings:.8f}, "
+                f"invertido ~{invested:.2f} {quote_currency}, P&L: {pnl_pct:+.2f}%). "
+                f"Sé conservador: no acumules comprando en cada ciclo. "
+                f"Compra adicional SOLO si los indicadores muestran una oportunidad clara de DCA (Dollar Cost Averaging) "
+                f"con confianza alta. Considera MANTENER si no hay cambios claros.\n"
             )
     else:
         portfolio_block = "\n**Portafolio:** No disponible (primera ejecución).\n"
@@ -149,9 +170,14 @@ def build_prompt(
 6. **Acción de precio:** Analiza las últimas velas OHLCV. ¿Hay patrones de reversión o continuación?
 
 **REGLAS DE DECISIÓN (necesitas al menos 3 confirmaciones):**
-- COMPRA (buy): Tendencia alcista (precio > SMA200 o cruzando hacia arriba), MACD creciente, RSI entre 30-65, volumen creciente, precio cerca de banda inferior de Bollinger o rebotando de soporte.
-- VENTA (sell): Tendencia bajista o señales de reversión, RSI > 70, MACD decreciente, precio cerca de banda superior de Bollinger, volumen decreciente en subida. Pondera tu ganancia/pérdida actual al decidir.
-- MANTENER (hold): SOLO si hay señales claras en ambas direcciones que se contradigan. NO uses hold como opción por defecto ni por indecisión.
+- COMPRA (buy): Tendencia alcista (precio > SMA200 o cruzando hacia arriba), MACD creciente, RSI entre 30-65, volumen creciente, precio cerca de banda inferior de Bollinger o rebotando de soporte. **IMPORTANTE: Si ya tienes posición abierta, necesitas al menos 4 confirmaciones fuertes para comprar más. No acumules posiciones solo porque la tendencia es "alcista" — necesitas una razón específica y diferente al ciclo anterior.**
+- VENTA (sell): Tendencia bajista o señales de reversión, RSI > 70, MACD decreciente, precio cerca de banda superior de Bollinger, volumen decreciente en subida. Pondera tu ganancia/pérdida actual al decidir. **Si tienes ganancias > 1%, considera tomar beneficios parciales.**
+- MANTENER (hold): Cuando las condiciones no han cambiado significativamente desde la última señal, cuando ya tienes posición abierta y no hay señal fuerte nueva, o cuando los indicadores son mixtos. **MANTENER es la opción CORRECTA cuando ya tienes posición y el mercado está lateral o sin cambios claros. NO compres en cada ciclo solo porque hay tendencia alcista general.**
+
+**ANTI-SOBRE-TRADING (MUY IMPORTANTE):**
+- Si ya tienes posición abierta y los indicadores no han cambiado drásticamente, la señal correcta es MANTENER (hold).
+- NO compres repetidamente solo porque RSI está entre 30-65 y MACD es positivo — eso describe mercado "normal", no una oportunidad de compra.
+- Una compra adicional (DCA) solo se justifica si el precio ha bajado significativamente (>2%) desde tu precio promedio de compra, creando una oportunidad real de mejorar tu entrada.
 
 **GESTIÓN DE CAPITAL (OBLIGATORIO):**
 - COMPRA: Indica "amount_usdt" (cuántos {quote_currency} invertir). Máximo 30% de tu {quote_currency} disponible ({free_quote:.4f}). No compres si tu balance es < 5 {quote_currency}. Diversifica: monitoreas {num_pairs} pares.
