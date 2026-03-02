@@ -63,7 +63,6 @@ class GlobalConfigBase(BaseModel):
     stop_loss_percent: float
     max_trades_per_day: int
     pair_delay: int
-    order_amount_per_pair: str
     log_level: str
     
     # API Keys

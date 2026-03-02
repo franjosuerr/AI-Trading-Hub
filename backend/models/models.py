@@ -53,7 +53,6 @@ class GlobalConfig(Base):
     stop_loss_percent = Column(Float, default=2.0)
     max_trades_per_day = Column(Integer, default=5)
     pair_delay = Column(Integer, default=2)
-    order_amount_per_pair = Column(String, default="BTC/USDT:0.001,ETH/USDT:0.01,SOL/USDT:1")
     
     # Logs
     log_level = Column(String, default="INFO")

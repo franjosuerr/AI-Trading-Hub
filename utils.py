@@ -18,7 +18,8 @@ SIGNAL_LABEL_ES = {"buy": "comprar", "sell": "vender", "hold": "mantener"}
 def validate_ai_signal(data: Any) -> Optional[dict]:
     """
     Valida que el dato sea un dict con signal ('buy'|'sell'|'hold'),
-    confidence (float 0-1) y reason (string).
+    confidence (float 0-1), reason (string), y opcionalmente
+    amount_usdt (para buy) o sell_percentage (para sell).
     Retorna el dict normalizado o None si es inválido.
     """
     if data is None:
@@ -48,7 +49,25 @@ def validate_ai_signal(data: Any) -> Optional[dict]:
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
     reason = str(data.get("reason") or "").strip() or "Sin razón proporcionada"
-    return {"signal": signal, "confidence": confidence, "reason": reason}
+    result = {"signal": signal, "confidence": confidence, "reason": reason}
+
+    # Extraer monto USDT para órdenes de compra
+    if signal == "buy":
+        try:
+            amount_usdt = float(data.get("amount_usdt", 0))
+            result["amount_usdt"] = max(0.0, amount_usdt)
+        except (TypeError, ValueError):
+            result["amount_usdt"] = 0.0
+
+    # Extraer porcentaje de venta para órdenes de venta
+    if signal == "sell":
+        try:
+            sell_pct = float(data.get("sell_percentage", 100))
+            result["sell_percentage"] = max(1.0, min(100.0, sell_pct))
+        except (TypeError, ValueError):
+            result["sell_percentage"] = 100.0
+
+    return result
 
 
 def round_to_precision(value: float, precision: int) -> float:
@@ -102,15 +121,15 @@ def format_context_summary(df, last_n: int = 20) -> str:
         change_10 = (current - close_10_ago) / close_10_ago * 100
     else:
         change_10 = 0
-    if change_5 > 0.5:
+    if change_5 > 0.3:
         trend_5 = "sube"
-    elif change_5 < -0.5:
+    elif change_5 < -0.3:
         trend_5 = "baja"
     else:
         trend_5 = "lateral"
-    if change_10 > 0.5:
+    if change_10 > 0.3:
         trend_10 = "sube"
-    elif change_10 < -0.5:
+    elif change_10 < -0.3:
         trend_10 = "baja"
     else:
         trend_10 = "lateral"
@@ -120,15 +139,3 @@ def format_context_summary(df, last_n: int = 20) -> str:
         f"Precio hace 10 velas: {close_10_ago:.4f} (variación {change_10:+.2f}%) → tendencia {trend_10}.",
     ]
     return "\n".join(lines)
-
-
-def get_order_amount_for_pair(pair: str, amounts_map: dict) -> float:
-    """
-    Devuelve el monto configurado para el par. Si no existe, intenta un default por base.
-    """
-    if pair in amounts_map and amounts_map[pair] > 0:
-        return amounts_map[pair]
-    # Defaults por símbolo base común
-    base_defaults = {"BTC": 0.001, "ETH": 0.01, "SOL": 1.0, "BNB": 0.01}
-    base = pair.split("/")[0] if "/" in pair else pair
-    return base_defaults.get(base, 0.01)

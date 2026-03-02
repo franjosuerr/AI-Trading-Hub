@@ -12,7 +12,6 @@ from config import (
     CANDLE_COUNT,
     PROMPT_CANDLES,
     CONFIDENCE_THRESHOLD,
-    ORDER_AMOUNT_PER_PAIR,
     INTERVAL,
     PAIR_DELAY,
     TEST_MODE,
@@ -37,7 +36,7 @@ from telegram_notifier import (
     notify_critical_error,
     notify_cycle_summary,
 )
-from utils import format_candles_for_prompt, format_context_summary, get_order_amount_for_pair, SIGNAL_LABEL_ES
+from utils import format_candles_for_prompt, format_context_summary, SIGNAL_LABEL_ES
 
 # Contador de trades por par por día (para límite de seguridad)
 _trades_today: dict[str, list[datetime]] = defaultdict(list)
@@ -143,7 +142,7 @@ def run_cycle(exchange, logger):
         if current_price is not None:
             logger.info("Precio actual (ticker) %s: %s", pair, current_price)
 
-        # Balance disponible para este par (para contexto de la IA)
+        # Balance disponible para este par (portafolio para la IA)
         base_currency = pair.split("/")[0] if "/" in pair else pair
         quote_currency = pair.split("/")[1] if "/" in pair else "USDT"
         free_base = 0.0
@@ -153,9 +152,23 @@ def run_cycle(exchange, logger):
                 free_base = float(balance_start[base_currency].get("free", 0) or 0)
             if quote_currency in balance_start and isinstance(balance_start[quote_currency], dict):
                 free_quote = float(balance_start[quote_currency].get("free", 0) or 0)
-        balance_hint = f"{quote_currency}: {free_quote:.4f}, {base_currency}: {free_base:.6f}"
 
-        # 3. Señal de la IA (con precio actual, balance, stop-loss y conservadurismo)
+        # Construir contexto de portafolio para la IA
+        portfolio_context = {
+            "base": base_currency,
+            "quote": quote_currency,
+            "holdings": free_base,
+            "free_quote": free_quote,
+            "avg_entry_price": 0.0,
+            "invested_value": 0.0,
+            "current_value": free_base * current_price if current_price else 0.0,
+            "pnl_usdt": 0.0,
+            "pnl_pct": 0.0,
+            "total_trades_buy": 0,
+            "total_trades_sell": 0,
+        }
+
+        # 3. Señal de la IA (con portafolio completo, decide monto)
         signal_data = get_ai_signal(
             pair,
             TIMEFRAME,
@@ -164,8 +177,9 @@ def run_cycle(exchange, logger):
             PROMPT_CANDLES,
             context_summary,
             current_price=current_price,
-            balance_hint=balance_hint,
+            portfolio_context=portfolio_context,
             stop_loss_percent=STOP_LOSS_PERCENT,
+            num_pairs=len(PAIRS),
         )
         if signal_data is None:
             logger.warning("No se pudo obtener señal IA para %s.", pair)
@@ -211,28 +225,44 @@ def run_cycle(exchange, logger):
             errors_this_cycle.append(f"{pair}: límite diario")
             continue
 
-        # 5. Crear orden (market; en test mode se simula)
-        amount = get_order_amount_for_pair(pair, ORDER_AMOUNT_PER_PAIR)
-        if amount <= 0:
-            logger.warning("Monto no configurado para %s.", pair)
-            continue
+        # 5. Crear orden con monto decidido por la IA
+        amount = 0.0
 
-        # Para VENDER hay que tener la moneda base (ej. ETH); comprobar saldo antes
-        if signal_data["signal"] == "sell":
-            base_currency = pair.split("/")[0] if "/" in pair else pair
-            balance_now = fetch_balance(exchange, PAIRS)
-            free_base = 0.0
-            if balance_now and base_currency in balance_now:
-                free_base = float(balance_now[base_currency].get("free", 0) or 0)
-            if free_base < amount:
-                logger.warning(
-                    "Saldo insuficiente de %s para vender: tienes %s, se requiere %s. Se omite la orden.",
-                    base_currency,
-                    free_base,
-                    amount,
-                )
-                errors_this_cycle.append(f"{pair}: saldo insuficiente de {base_currency} para vender")
+        if signal_data["signal"] == "buy":
+            amount_usdt = signal_data.get("amount_usdt", 0)
+            if amount_usdt <= 0 or not current_price or current_price <= 0:
+                logger.warning("La IA no especificó monto válido para comprar %s.", pair)
                 continue
+            # Verificar saldo real
+            balance_now = fetch_balance(exchange, PAIRS)
+            free_quote_now = 0.0
+            if balance_now and quote_currency in balance_now:
+                free_quote_now = float(balance_now[quote_currency].get("free", 0) or 0)
+            if amount_usdt > free_quote_now:
+                amount_usdt = free_quote_now * 0.95
+            if amount_usdt < 1.0:
+                logger.warning("Monto insuficiente para comprar %s: %.4f %s.", pair, amount_usdt, quote_currency)
+                errors_this_cycle.append(f"{pair}: saldo insuficiente")
+                continue
+            amount = amount_usdt / current_price
+            logger.info("IA decidió invertir %.4f %s en %s → %.8f %s", amount_usdt, quote_currency, pair, amount, base_currency)
+
+        elif signal_data["signal"] == "sell":
+            sell_pct = signal_data.get("sell_percentage", 100)
+            balance_now = fetch_balance(exchange, PAIRS)
+            free_base_now = 0.0
+            if balance_now and base_currency in balance_now:
+                free_base_now = float(balance_now[base_currency].get("free", 0) or 0)
+            if free_base_now <= 0:
+                logger.warning("No tienes %s para vender.", base_currency)
+                errors_this_cycle.append(f"{pair}: sin {base_currency} para vender")
+                continue
+            amount = free_base_now * (sell_pct / 100.0)
+            logger.info("IA decidió vender %.1f%% de %s → %.8f %s", sell_pct, pair, amount, base_currency)
+
+        if amount <= 0:
+            logger.warning("Monto calculado es 0 para %s.", pair)
+            continue
 
         logger.info("Ejecutando orden: %s %s cantidad=%s (market)", signal_data["signal"], pair, amount)
         order = create_order(exchange, pair, signal_data["signal"], amount, "market")

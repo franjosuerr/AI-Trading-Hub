@@ -29,7 +29,6 @@ def get_config(db: Session = Depends(get_db)):
             candle_count=210,
             prompt_candles=10,
             confidence_threshold=0.7,
-            order_amount_per_pair="BTC/USDT:0.001,ETH/USDT:0.01,SOL/USDT:1",
             pair_delay=2,
             max_trades_per_day=5
         )
