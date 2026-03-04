@@ -53,6 +53,8 @@ class GlobalConfig(Base):
     stop_loss_percent = Column(Float, default=2.0)
     max_trades_per_day = Column(Integer, default=5)
     pair_delay = Column(Integer, default=2)
+    max_exposure_percent = Column(Float, default=10.0)
+    cooldown_minutes = Column(Integer, default=120)
     
     # Logs
     log_level = Column(String, default="INFO")

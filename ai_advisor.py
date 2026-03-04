@@ -93,9 +93,10 @@ def build_prompt(
         total_buys = portfolio_context.get("total_trades_buy", 0)
         total_sells = portfolio_context.get("total_trades_sell", 0)
 
+        total_capital = free_quote + invested
         portfolio_lines = [
             f"\n**Tu portafolio actual (cuenta real):**",
-            f"  - {quote_currency} disponible: {free_quote:.4f} {quote_currency}",
+            f"  - {quote_currency} disponible: {free_quote:.4f} {quote_currency} (Capital Total Est: {total_capital:.4f})",
             f"  - Posición en {base_currency}: {holdings:.8f} {base_currency}",
         ]
         if holdings > 0 and avg_entry > 0:
@@ -198,19 +199,19 @@ def build_prompt(
             else:
                 analysis_items.append(f"    → Precio en zona MEDIA de Bollinger: NO es señal de compra ni venta por Bollinger")
 
-    sma200 = indicators.get("sma200")
-    sma50 = indicators.get("sma50")
-    if current_price and sma200:
-        diff_200 = (current_price - sma200) / sma200 * 100
-        analysis_items.append(f"  - Precio vs SMA200: {diff_200:+.2f}% ({'por encima' if diff_200 > 0 else 'por debajo'})")
-    if current_price and sma50:
-        diff_50 = (current_price - sma50) / sma50 * 100
-        analysis_items.append(f"  - Precio vs SMA50: {diff_50:+.2f}% ({'por encima' if diff_50 > 0 else 'por debajo'})")
-    if sma50 and sma200:
-        if sma50 > sma200:
-            analysis_items.append("  - SMA50 > SMA200: Golden Cross (tendencia alcista)")
+    ema200 = indicators.get("ema200")
+    ema50 = indicators.get("ema50")
+    if current_price and ema200:
+        diff_200 = (current_price - ema200) / ema200 * 100
+        analysis_items.append(f"  - Precio vs EMA200: {diff_200:+.2f}% ({'por encima' if diff_200 > 0 else 'por debajo'})")
+    if current_price and ema50:
+        diff_50 = (current_price - ema50) / ema50 * 100
+        analysis_items.append(f"  - Precio vs EMA50: {diff_50:+.2f}% ({'por encima' if diff_50 > 0 else 'por debajo'})")
+    if ema50 and ema200:
+        if ema50 > ema200:
+            analysis_items.append("  - EMA50 > EMA200: Cruce alcista (tendencia alcista)")
         else:
-            analysis_items.append("  - SMA50 < SMA200: Death Cross (tendencia bajista — precaución)")
+            analysis_items.append("  - EMA50 < EMA200: Cruce bajista (tendencia bajista — precaución)")
 
     macd_hist = indicators.get("macd_histogram")
     if macd_hist is not None:
@@ -262,44 +263,45 @@ If indicators are neutral or conflicting, the DEFAULT action is HOLD.
 
 ### 4. TRADING RULES (EXECUTE IN ORDER)
 
-**PHASE A: VERIFICATION (Sanity Check)**
-1. **RSI Check**: 
-   - If RSI > 60: YOU CANNOT BUY. (Exception: None).
-   - If RSI < 30: Strong Buy Zone.
-2. **Trend Check**:
-   - Price < SMA200: Bearish Trend. CAUTION on buys.
-   - Price > SMA200: Bullish Trend. Safer for buys.
+**SCENARIO A: TREND FOLLOWING (Bullish Market)**
+*Goal: Ride an established uptrend.*
+- **BUY SIGNAL** requires ALL of these:
+  1. Price > EMA50 AND EMA50 > EMA200 (Bullish trend).
+  2. RSI > 50 and rising (Momentum).
+  3. MACD Histogram > 0 AND MACD Line > Signal Line.
+  4. Bollinger Bands are expanded/expanding upwards.
+- **Position Sizing:** IF Scenario A met -> Allocate EXACTLY 2% of Total Est Capital.
 
-**PHASE B: DECISION LOGIC**
+**SCENARIO B: REVERSAL OPPORTUNITY (Bearish Market Bounce)**
+*Goal: Catch a bounce in an oversold downtrend.*
+- **BUY SIGNAL** requires ALL of these:
+  1. Bearish trend: Price < EMA50 AND EMA50 < EMA200.
+  2. RSI < 30 (Oversold).
+  3. Price touches or pierces the Lower Bollinger Band.
+  4. MACD Histogram shows decreasing negative momentum (e.g. flattening or turning up) OR Volume > Average Volume (Exhaustion).
+- **Position Sizing:** IF Scenario B met -> Allocate EXACTLY 1% of Total Est Capital (Lower Risk).
 
-**SCENARIO 1: NO POSITION (Holdings = 0)**
-*Goal: Find a high-probability entry.*
-- **BUY SIGNAL** requires AT LEAST 3 of these:
-  1. RSI < 45 (Not Overbought)
-  2. MACD Histogram > 0 AND Increasing (Momentum)
-  3. Price near Lower Bollinger Band (< 30% position)
-  4. Volume > Average Volume
-- **IF NOT MET**: SIGNAL = HOLD.
-
-**SCENARIO 2: HAVE POSITION (Holdings > 0)**
-*Goal: Manage risk and take profit.*
+**SCENARIO C: HAVE POSITION (Holdings > 0)**
+*Goal: Manage risk and take profit. Evaluate these Exit Rules.*
 - **SELL SIGNAL** requires ANY of these:
-  1. **Stop Loss**: PnL < -{stop_loss_percent or 2.0}% (MANDATORY SELL)
-  2. **Take Profit**: PnL > 1.5% AND (RSI > 70 OR Price > Upper BB)
-  3. **Trend Reversal**: MACD falls below Signal Line OR Price falls below SMA50.
-- **DCA (Add to position)** ONLY if:
-  1. PnL < -3% AND RSI < 30 AND Reversal Confirmed. (Very Rare).
-- **IF NOT MET**: SIGNAL = HOLD.
+  1. **Stop Loss**: PnL < -{stop_loss_percent or 2.0}% (MANDATORY SELL TO PRESERVE CAPITAL).
+  2. **Dynamic Take Profit (Trailing Stop)**: If PnL > 2.0%, and Price drops by 1% from its recent local peak, you MUST SELL.
+  3. **Alternative Take Profit**: Price reaches or exceeds the Upper Bollinger Band OR hits a major Resistance Zone.
+  4. **Momentum Exit**: MACD falls below Signal Line OR RSI drops below 50.
+- **IF NONE MET, KEEP HOLDING.**
+
+**DEFAULT ACTION: HOLD**
+If NO buy scenario is fully met and NO sell scenario is fully met, your signal MUST be HOLD.
 
 ### 5. REQUIRED OUTPUT FORMAT
 Response must be a SINGLE JSON object with this exact structure. 
-"reason" must explicitly cite the numbers (e.g. "RSI is 75.4 which is > 60").
+"reason" must explicitly cite the numbers (e.g. "Price is above EMA50, RSI is 42").
 
 {{
   "signal": "buy" | "sell" | "hold",
   "confidence": 0.0 to 1.0,
   "reason": "Step-by-step logic citing specific indicator values",
-  "amount_usdt": (for buy: max 30% of available USDT),
+  "amount_usdt": (for buy: the exact USDT amount calculated based on rule A/B; ensure it does not exceed free_quote),
   "sell_percentage": (for sell: 1-100)
 }}
 """

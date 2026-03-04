@@ -390,7 +390,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     openai_api_key: '', groq_api_key: '', google_api_key: '', ollama_host: 'http://localhost:11434',
     openai_model: 'gpt-4o-mini', groq_model: 'llama-3.1-8b-instant', gemini_model: 'gemini-2.0-flash', ollama_model: 'llama2',
     pairs: 'SOL/USDT,ETH/USDT', timeframe: '15m', candle_count: 210, prompt_candles: 10, confidence_threshold: 0.7,
-    pair_delay: 2, max_trades_per_day: 5, stop_loss_percent: 2.0, log_level: 'INFO'
+    pair_delay: 2, max_trades_per_day: 5, stop_loss_percent: 2.0, max_exposure_percent: 10.0, cooldown_minutes: 60, log_level: 'INFO'
   });
   const [isGlobalModalOpen, setIsGlobalModalOpen] = useState(false);
   const [statsUserId, setStatsUserId] = useState(null);
@@ -700,6 +700,20 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>TRADES/DÍA</label>
                   <input type="number" value={globalConfig.max_trades_per_day} onChange={(e) => setGlobalConfig({ ...globalConfig, max_trades_per_day: parseInt(e.target.value) })} />
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>STOP LOSS %</label>
+                  <input type="number" step="0.1" value={globalConfig.stop_loss_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, stop_loss_percent: parseFloat(e.target.value) })} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>MAX EXPOSICIÓN %</label>
+                  <input type="number" step="0.1" value={globalConfig.max_exposure_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, max_exposure_percent: parseFloat(e.target.value) })} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>COOLDOWN (MIN)</label>
+                  <input type="number" value={globalConfig.cooldown_minutes} onChange={(e) => setGlobalConfig({ ...globalConfig, cooldown_minutes: parseInt(e.target.value) })} />
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(0,255,136,0.05)', padding: '15px', borderRadius: '12px', border: '1px solid rgba(0,255,136,0.2)' }}>

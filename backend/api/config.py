@@ -15,22 +15,24 @@ def get_config(db: Session = Depends(get_db)):
     config = db.query(GlobalConfig).first()
     if not config:
         config = GlobalConfig(
-            ai_provider="groq",
+            ai_provider="openai",
             openai_api_key="",
             groq_api_key="",
             google_api_key="",
             openai_model="gpt-4o-mini",
             groq_model="llama-3.1-8b-instant",
             gemini_model="gemini-2.0-flash",
-            test_mode=False,
+            test_mode=True,
             pairs="SOL/USDT,ETH/USDT",
             timeframe="15m",
             interval=300,
             candle_count=210,
-            prompt_candles=10,
+            prompt_candles=15,
             confidence_threshold=0.7,
             pair_delay=2,
-            max_trades_per_day=5
+            max_trades_per_day=5,
+            max_exposure_percent=10.0,
+            cooldown_minutes=120
         )
         db.add(config)
         db.commit()
