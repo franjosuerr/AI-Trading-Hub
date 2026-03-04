@@ -17,6 +17,32 @@ logger = get_logger("api")
 
 logger.info("Iniciando aplicación FastAPI...")
 
+# ─── Migración Automática de Base de Datos ───
+def auto_migrate_db():
+    import sqlite3
+    db_path = os.getenv("DATABASE_URL", "sqlite:///./data/trading_bot.db").replace("sqlite:///", "")
+    if os.path.exists(db_path):
+        logger.info("Ejecutando migraciones automáticas de base de datos...")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute('ALTER TABLE global_config ADD COLUMN max_exposure_percent FLOAT DEFAULT 10.0')
+            logger.info("Columna 'max_exposure_percent' agregada.")
+        except sqlite3.OperationalError:
+            pass # Ya existe
+            
+        try:
+            cursor.execute('ALTER TABLE global_config ADD COLUMN cooldown_minutes INTEGER DEFAULT 120')
+            logger.info("Columna 'cooldown_minutes' agregada.")
+        except sqlite3.OperationalError:
+            pass # Ya existe
+            
+        conn.commit()
+        conn.close()
+
+auto_migrate_db()
+
 # Crear tablas
 Base.metadata.create_all(bind=engine)
 
