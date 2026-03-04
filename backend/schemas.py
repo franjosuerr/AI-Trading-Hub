@@ -63,6 +63,8 @@ class GlobalConfigBase(BaseModel):
     stop_loss_percent: float
     max_trades_per_day: int
     pair_delay: int
+    max_exposure_percent: float
+    cooldown_minutes: int
     log_level: str
     
     # API Keys

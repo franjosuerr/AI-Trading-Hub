@@ -325,7 +325,7 @@ def _send_telegram_for_user(user, text, tg_logger=None):
 # ─── Utilidad: cooldown post-reinicio ───
 
 def _check_recent_trades_cooldown(user_id: int, pair: str, cooldown_minutes: int, log) -> bool:
-    """Retorna True si hay trades recientes dentro del cooldown y NO se debe operar."""
+    """Retorna True si hay compras recientes dentro del cooldown y NO se debe operar."""
     try:
         db = SessionLocal()
         try:
@@ -333,19 +333,46 @@ def _check_recent_trades_cooldown(user_id: int, pair: str, cooldown_minutes: int
             recent = db.query(Trade).filter(
                 Trade.user_id == user_id,
                 Trade.pair == pair,
+                Trade.side == 'buy',
                 Trade.timestamp >= cutoff,
             ).count()
         finally:
             db.close()
         if recent > 0:
             log.info(
-                "Cooldown activo para %s: %d trade(s) en los últimos %d minutos. Se omite.",
+                "Cooldown anti-spam activo para %s: %d compra(s) en los últimos %d minutos. Se omite.",
                 pair, recent, cooldown_minutes
             )
             return True
         return False
     except Exception as e:
         log.warning("Error al verificar cooldown para %s: %s", pair, str(e)[:100])
+        return False
+
+def _check_stop_loss_cooldown(user_id: int, pair: str, cooldown_minutes: int, log) -> bool:
+    """Retorna True si hubo un trade de VENTA reciente con pérdida (Stop-Loss)."""
+    try:
+        db = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+            recent_sl = db.query(Trade).filter(
+                Trade.user_id == user_id,
+                Trade.pair == pair,
+                Trade.side == 'sell',
+                Trade.profit < 0,
+                Trade.timestamp >= cutoff,
+            ).first()
+        finally:
+            db.close()
+        if recent_sl:
+            log.info(
+                "Cooldown activo (%d min) por STOP-LOSS previo en %s. Última venta con pérdida: %s.",
+                cooldown_minutes, pair, recent_sl.timestamp
+            )
+            return True
+        return False
+    except Exception as e:
+        log.warning("Error al verificar cooldown SL para %s: %s", pair, str(e)[:100])
         return False
 
 
@@ -583,22 +610,32 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         except Exception as e:
             user_logger.warning("Error al verificar límite diario: %s", str(e)[:100])
 
-        # COOLDOWN: Evitar compras en ciclos consecutivos (mínimo 15 minutos o 3x el intervalo)
-        cooldown_minutes = max(int((config.interval or 300) / 60) * 3, 15)
+        # COOLDOWN DE COMPRAS y STOP-LOSS
+        # Cooldown anti-spam (min 15 min)
+        anti_spam_minutes = max(int((config.interval or 300) / 60) * 3, 15)
+        # Cooldown real de Stop Loss (usamos la config global, ej. 120 min)
+        sl_cooldown_minutes = config.cooldown_minutes or 120
+        
         if signal_data["signal"] == "buy":
-            if await asyncio.to_thread(_check_recent_trades_cooldown, user.id, pair, cooldown_minutes, user_logger):
+            # 1. Verificar Anti-Spam
+            if await asyncio.to_thread(_check_recent_trades_cooldown, user.id, pair, anti_spam_minutes, user_logger):
+                continue
+                
+            # 2. Verificar Cooldown de Stop Loss
+            if await asyncio.to_thread(_check_stop_loss_cooldown, user.id, pair, sl_cooldown_minutes, user_logger):
                 continue
 
-            # LÍMITE DE INVERSIÓN TOTAL: No comprar si ya tienes >70% del portafolio invertido
+            # LÍMITE DE INVERSIÓN TOTAL: No exceder la exposición máxima
+            max_exposure = config.max_exposure_percent or 10.0
             invested_pct = await asyncio.to_thread(
                 _get_total_invested_percentage, user.id, pairs, balance_effective, exchange, user_logger
             )
-            if invested_pct >= 70.0:
+            if invested_pct >= max_exposure:
                 user_logger.warning(
-                    "Portafolio ya %.1f%% invertido (>70%%). No se compra más %s. Esperando señales de venta.",
-                    invested_pct, pair
+                    "Portafolio ya %.1f%% invertido (límite %.1f%%). No se compra más %s. Esperando señales de venta.",
+                    invested_pct, max_exposure, pair
                 )
-                errors_this_cycle.append(f"{pair}: portafolio >70% invertido, compra bloqueada")
+                errors_this_cycle.append(f"{pair}: portafolio >{max_exposure}% invertido, compra bloqueada")
                 continue
 
         # Calcular monto dinámico decidido por la IA
@@ -716,6 +753,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             try:
                 db = SessionLocal()
                 try:
+                    real_pnl = portfolio_ctx.get("pnl_usdt", 0.0) if signal_data["signal"] == "sell" else 0.0
                     new_trade = Trade(
                         user_id=user.id,
                         pair=pair,
@@ -724,7 +762,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                         price=trade_price,
                         order_id=str(order_id),
                         simulated=simulated,
-                        profit=0.0,
+                        profit=real_pnl,
                     )
                     db.add(new_trade)
                     db.commit()

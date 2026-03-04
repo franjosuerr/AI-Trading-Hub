@@ -157,8 +157,8 @@ function UserStatsModal({ userId, userName, onClose }) {
   const [balance, setBalance] = useState(null);
   const [balanceLoading, setBalanceLoading] = useState(true);
   const [currentMonth, setCurrentMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    return `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}`;
   });
 
   useEffect(() => { fetchStats(); }, [currentMonth]);
@@ -344,7 +344,7 @@ function UserStatsModal({ userId, userName, onClose }) {
                     <tbody>
                       {stats.recent_trades.map((t, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <td style={{ padding: '8px', color: '#999' }}>{new Date(t.timestamp).toLocaleString('es', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                          <td style={{ padding: '8px', color: '#999' }}>{new Date(t.timestamp).toLocaleString('es', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}</td>
                           <td style={{ padding: '8px', fontWeight: '600' }}>{t.pair}</td>
                           <td style={{ padding: '8px', textAlign: 'center' }}>
                             <span style={{ background: t.side === 'buy' ? 'rgba(0,242,255,0.1)' : 'rgba(255,85,136,0.1)', color: t.side === 'buy' ? '#00f2ff' : '#ff5588', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '700' }}>
@@ -390,7 +390,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     openai_api_key: '', groq_api_key: '', google_api_key: '', ollama_host: 'http://localhost:11434',
     openai_model: 'gpt-4o-mini', groq_model: 'llama-3.1-8b-instant', gemini_model: 'gemini-2.0-flash', ollama_model: 'llama2',
     pairs: 'SOL/USDT,ETH/USDT', timeframe: '15m', candle_count: 210, prompt_candles: 10, confidence_threshold: 0.7,
-    pair_delay: 2, max_trades_per_day: 5, stop_loss_percent: 2.0, log_level: 'INFO'
+    pair_delay: 2, max_trades_per_day: 5, stop_loss_percent: 2.0, max_exposure_percent: 10.0, cooldown_minutes: 60, log_level: 'INFO'
   });
   const [isGlobalModalOpen, setIsGlobalModalOpen] = useState(false);
   const [statsUserId, setStatsUserId] = useState(null);
@@ -403,9 +403,22 @@ function Dashboard({ userRole, userId, username, onLogout }) {
       const [usersRes, statsRes, configRes] = await Promise.all([
         api.get('/users/'), api.get('/stats/summary'), api.get('/config/')
       ]);
-      setUsers(usersRes.data);
+
+      // Update users list and stats
       setStats(statsRes.data);
-      setGlobalConfig(configRes.data);
+
+      // Only update the form states if the modals are NOT currently open
+      setUsers(prev => {
+        if (!isModalOpen) return usersRes.data;
+        // If the user modal is open, we update the main list but we shouldn't wipe their editing form
+        // (form is separate state anyway, but just in case, updating users is safe)
+        return usersRes.data;
+      });
+
+      setGlobalConfig(prev => {
+        if (!isGlobalModalOpen) return configRes.data;
+        return prev;
+      });
       setLoading(false);
     } catch (error) { logger.error("Error al obtener datos", { error: error.message }); }
   };
@@ -458,7 +471,8 @@ function Dashboard({ userRole, userId, username, onLogout }) {
   const downloadLog = async (uid, uname) => {
     try {
       const res = await api.get(`/logs/bot/${uid}/download`, { responseType: 'blob' });
-      const today = new Date().toISOString().slice(0, 10);
+      const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+      const today = `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}-${p.find(x => x.type === 'day').value}`;
       const url = window.URL.createObjectURL(new Blob([res.data], { type: 'text/plain' }));
       const a = document.createElement('a');
       a.href = url;
@@ -686,6 +700,20 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>TRADES/DÍA</label>
                   <input type="number" value={globalConfig.max_trades_per_day} onChange={(e) => setGlobalConfig({ ...globalConfig, max_trades_per_day: parseInt(e.target.value) })} />
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>STOP LOSS %</label>
+                  <input type="number" step="0.1" value={globalConfig.stop_loss_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, stop_loss_percent: parseFloat(e.target.value) })} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>MAX EXPOSICIÓN %</label>
+                  <input type="number" step="0.1" value={globalConfig.max_exposure_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, max_exposure_percent: parseFloat(e.target.value) })} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>COOLDOWN (MIN)</label>
+                  <input type="number" value={globalConfig.cooldown_minutes} onChange={(e) => setGlobalConfig({ ...globalConfig, cooldown_minutes: parseInt(e.target.value) })} />
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(0,255,136,0.05)', padding: '15px', borderRadius: '12px', border: '1px solid rgba(0,255,136,0.2)' }}>

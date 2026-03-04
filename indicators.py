@@ -57,6 +57,10 @@ def compute_sma(close: pd.Series, period: int) -> pd.Series:
     return _sma(close, period)
 
 
+def compute_ema(close: pd.Series, period: int) -> pd.Series:
+    """EMA de periodo dado."""
+    return _ema(close, period)
+
 def compute_bollinger_bands(
     close: pd.Series, period: int = 20, std_dev: float = 2.0
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -90,8 +94,8 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
 
     rsi = compute_rsi(close, 14)
     macd_line, signal_line, histogram = compute_macd(close)
-    sma50 = compute_sma(close, 50)
-    sma200 = compute_sma(close, 200)
+    ema50 = compute_ema(close, 50)
+    ema200 = compute_ema(close, 200)
     bb_upper, bb_mid, bb_lower = compute_bollinger_bands(close, 20, 2.0)
     vol_avg = compute_volume_avg(volume, 20)
 
@@ -107,8 +111,8 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     last_macd = _last(macd_line)
     last_signal = _last(signal_line)
     last_hist = _last(histogram)
-    last_sma50 = _last(sma50)
-    last_sma200 = _last(sma200)
+    last_ema50 = _last(ema50)
+    last_ema200 = _last(ema200)
     last_bb_upper = _last(bb_upper)
     last_bb_lower = _last(bb_lower)
     last_vol_avg = _last(vol_avg)
@@ -119,8 +123,8 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
         "macd_line": last_macd,
         "macd_signal": last_signal,
         "macd_histogram": last_hist,
-        "sma50": last_sma50,
-        "sma200": last_sma200,
+        "ema50": last_ema50,
+        "ema200": last_ema200,
         "bb_upper": last_bb_upper,
         "bb_lower": last_bb_lower,
         "volume": last_volume,
@@ -138,8 +142,8 @@ def get_indicators_series(df: pd.DataFrame) -> dict:
     volume = df["volume"] if "volume" in df.columns else pd.Series([0] * len(df))
     rsi = compute_rsi(close, 14)
     macd_line, signal_line, histogram = compute_macd(close)
-    sma50 = compute_sma(close, 50)
-    sma200 = compute_sma(close, 200)
+    ema50 = compute_ema(close, 50)
+    ema200 = compute_ema(close, 200)
     bb_upper, bb_mid, bb_lower = compute_bollinger_bands(close, 20, 2.0)
     vol_avg = compute_volume_avg(volume, 20)
     return {
@@ -147,8 +151,8 @@ def get_indicators_series(df: pd.DataFrame) -> dict:
         "macd_line": macd_line,
         "macd_signal": signal_line,
         "macd_histogram": histogram,
-        "sma50": sma50,
-        "sma200": sma200,
+        "ema50": ema50,
+        "ema200": ema200,
         "bb_upper": bb_upper,
         "bb_lower": bb_lower,
         "volume_avg": vol_avg,
