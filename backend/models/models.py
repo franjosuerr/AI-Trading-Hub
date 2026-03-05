@@ -29,17 +29,6 @@ class GlobalConfig(Base):
     __tablename__ = "global_config"
 
     id = Column(Integer, primary_key=True, index=True)
-    ai_provider = Column(String, default="groq")
-    openai_api_key = Column(String, nullable=True)
-    groq_api_key = Column(String, nullable=True)
-    google_api_key = Column(String, nullable=True)
-    ollama_host = Column(String, default="http://localhost:11434")
-    
-    # Modelos por proveedor
-    openai_model = Column(String, default="gpt-4o-mini")
-    groq_model = Column(String, default="llama-3.1-8b-instant")
-    gemini_model = Column(String, default="gemini-2.0-flash")
-    ollama_model = Column(String, default="llama2")
     
     timeframe = Column(String, default="15m")
     interval = Column(Integer, default=300)
@@ -48,13 +37,18 @@ class GlobalConfig(Base):
     
     # Parámetros de trading
     candle_count = Column(Integer, default=210)
-    prompt_candles = Column(Integer, default=10)
-    confidence_threshold = Column(Float, default=0.7)
     stop_loss_percent = Column(Float, default=2.0)
     max_trades_per_day = Column(Integer, default=5)
     pair_delay = Column(Integer, default=2)
     max_exposure_percent = Column(Float, default=10.0)
     cooldown_minutes = Column(Integer, default=120)
+    
+    # Parámetros Estrategia EMA
+    ema_fast = Column(Integer, default=7)
+    ema_slow = Column(Integer, default=30)
+    adx_period = Column(Integer, default=14)
+    adx_threshold = Column(Integer, default=25)
+    invest_percentage = Column(Float, default=75.0)
     
     # Logs
     log_level = Column(String, default="INFO")

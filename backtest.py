@@ -11,12 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pandas as pd
 
-from config import PAIRS, TIMEFRAME, CANDLE_COUNT, CONFIDENCE_THRESHOLD
+from config import PAIRS, TIMEFRAME, CANDLE_COUNT
 from logger_config import setup_logging, get_logger
 from exchange_client import create_exchange, fetch_ohlcv
 from indicators import compute_all_indicators, get_indicators_series
-from utils import format_candles_for_prompt
-from ai_advisor import get_ai_signal
 
 setup_logging()
 logger = get_logger("backtest")
@@ -26,20 +24,14 @@ def run_backtest(
     pairs: list[str] = None,
     timeframe: str = None,
     candle_count: int = None,
-    use_ai: bool = True,
-    confidence_threshold: float = None,
 ) -> dict:
     """
-    Ejecuta backtest: obtiene velas históricas, opcionalmente llama a la IA por cada vela
-    (costoso en tokens) o simula con reglas simples. Retorna métricas por par y globales.
-
-    use_ai=True: llama a la IA para cada vela (solo últimas N velas por paso) — muy costoso.
-    use_ai=False: usa regla simple (ej. RSI<30 buy, RSI>70 sell) para simular señales.
+    Ejecuta backtest: obtiene velas históricas y simula con reglas simples. Retorna métricas por par y globales.
     """
     pairs = pairs or PAIRS
     timeframe = timeframe or TIMEFRAME
     candle_count = candle_count or min(CANDLE_COUNT, 100)
-    confidence_threshold = confidence_threshold or CONFIDENCE_THRESHOLD
+    confidence_threshold = 0.7
 
     results = {}
     try:
@@ -62,51 +54,54 @@ def run_backtest(
             results[pair] = {"error": "Indicadores no calculados", "trades": 0, "pnl_pct": 0}
             continue
 
-        # Simular señales: por cada paso (desde vela 200 hasta el final), decidir con IA o regla
+        from indicators import compute_ema, compute_adx
+        
+        # Parámetros por defecto para el backtest (para simplificar, hardcoded según la estrategia)
+        ema_fast_len = 7
+        ema_slow_len = 30
+        adx_period = 14
+        adx_thresh = 25
+        
+        df["ema_fast"] = compute_ema(df["close"], ema_fast_len)
+        df["ema_slow"] = compute_ema(df["close"], ema_slow_len)
+        df["adx"] = compute_adx(df["high"], df["low"], df["close"], adx_period)
+
+        # Simular señales: por cada paso
         trades = []
         position = 0  # 0 sin posición, 1 largo, -1 corto (solo consideramos largo aquí)
         entry_price = 0.0
-        start_idx = min(200, max(50, len(df) - 10))
+        start_idx = max(50, ema_slow_len)
 
         for i in range(start_idx, len(df)):
-            window = df.iloc[: i + 1]
-            ind_current = compute_all_indicators(window)
-            candles_text = format_candles_for_prompt(window, 5)
-
-            if use_ai and exchange:
-                signal_data = get_ai_signal(
-                    pair, timeframe, candles_text, ind_current, prompt_candles=5
-                )
-                if signal_data:
-                    signal = signal_data["signal"]
-                    conf = signal_data["confidence"]
-                else:
-                    signal = "hold"
-                    conf = 0
-            else:
-                # Regla simple basada en RSI
-                rsi = ind_current.get("rsi")
-                if rsi is None:
-                    signal, conf = "hold", 0
-                elif rsi < 30:
-                    signal, conf = "buy", 0.75
-                elif rsi > 70:
-                    signal, conf = "sell", 0.75
-                else:
-                    signal, conf = "hold", 0
+            last_ema_fast = float(df["ema_fast"].iloc[i])
+            prev_ema_fast = float(df["ema_fast"].iloc[i-1])
+            last_ema_slow = float(df["ema_slow"].iloc[i])
+            prev_ema_slow = float(df["ema_slow"].iloc[i-1])
+            last_adx = float(df["adx"].iloc[i])
+            
+            last_gap = last_ema_fast - last_ema_slow
+            prev_gap = prev_ema_fast - prev_ema_slow
 
             close = float(df["close"].iloc[i])
-            if signal == "buy" and conf >= confidence_threshold and position <= 0:
-                if position == -1:
-                    # Cerrar corto (simplificado: no cortos en este ejemplo)
-                    pass
-                position = 1
-                entry_price = close
-                trades.append({"type": "buy", "price": close, "idx": i})
-            elif signal == "sell" and conf >= confidence_threshold and position >= 1:
+            
+            if position == 0:
+                # Condición de COMPRA: cruce EMA hacia arriba + ADX fuerte
+                if last_ema_fast > last_ema_slow and prev_ema_fast <= prev_ema_slow:
+                    if last_adx > adx_thresh:
+                        position = 1
+                        entry_price = close
+                        trades.append({"type": "buy", "price": close, "idx": i})
+            
+            elif position == 1:
+                # Condiciones de VENTA: Gap se reduce con profit, o Stop Loss
                 pnl_pct = (close - entry_price) / entry_price * 100
-                trades.append({"type": "sell", "price": close, "idx": i, "pnl_pct": pnl_pct})
-                position = 0
+                
+                if last_gap < prev_gap and close > entry_price:
+                    trades.append({"type": "sell", "price": close, "idx": i, "pnl_pct": pnl_pct})
+                    position = 0
+                elif pnl_pct <= -2.0:
+                    trades.append({"type": "sell", "price": close, "idx": i, "pnl_pct": pnl_pct})
+                    position = 0
 
         # Cerrar posición al final si queda abierta
         if position == 1 and len(df) > 0:
@@ -134,8 +129,6 @@ def main():
     parser.add_argument("--pairs", type=str, default="", help="Pares separados por coma (default: config)")
     parser.add_argument("--timeframe", type=str, default=TIMEFRAME, help="Timeframe (ej. 1h)")
     parser.add_argument("--candles", type=int, default=100, help="Número de velas históricas")
-    parser.add_argument("--no-ai", action="store_true", help="Usar reglas simples en lugar de IA")
-    parser.add_argument("--threshold", type=float, default=CONFIDENCE_THRESHOLD, help="Umbral de confianza")
     parser.add_argument("--output", type=str, default="", help="Archivo JSON de salida para resultados")
     args = parser.parse_args()
 
@@ -144,8 +137,6 @@ def main():
         pairs=pairs,
         timeframe=args.timeframe,
         candle_count=args.candles,
-        use_ai=not args.no_ai,
-        confidence_threshold=args.threshold,
     )
 
     print(json.dumps(results, indent=2))

@@ -126,7 +126,7 @@ function LoginScreen({ onLogin }) {
           <div style={{ background: 'linear-gradient(135deg, rgba(0, 242, 255, 0.1), rgba(112, 0, 255, 0.1))', width: '80px', height: '80px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', border: '1px solid rgba(0, 242, 255, 0.2)' }}>
             <Lock size={36} style={{ color: '#00f2ff' }} />
           </div>
-          <h1 style={{ fontSize: '2rem', fontWeight: '800', background: 'linear-gradient(to right, #00f2ff, #7000ff)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>AI TRADING HUB</h1>
+          <h1 style={{ fontSize: '2rem', fontWeight: '800', background: 'linear-gradient(to right, #00f2ff, #7000ff)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>TRADING HUB</h1>
           <p style={{ color: 'var(--text-dim)', marginTop: '0.5rem' }}>Inicia sesión para continuar</p>
         </div>
         <form onSubmit={handleSubmit} className="card" style={{ padding: '2rem', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -386,11 +386,10 @@ function Dashboard({ userRole, userId, username, onLogout }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [formData, setFormData] = useState({ username: '', email: '', coinex_api_key: '', coinex_secret: '', telegram_bot_token: '', telegram_chat_id: '', password: '' });
   const [globalConfig, setGlobalConfig] = useState({
-    ai_provider: 'groq', interval: 300, test_mode: false,
-    openai_api_key: '', groq_api_key: '', google_api_key: '', ollama_host: 'http://localhost:11434',
-    openai_model: 'gpt-4o-mini', groq_model: 'llama-3.1-8b-instant', gemini_model: 'gemini-2.0-flash', ollama_model: 'llama2',
-    pairs: 'SOL/USDT,ETH/USDT', timeframe: '15m', candle_count: 210, prompt_candles: 10, confidence_threshold: 0.7,
-    pair_delay: 2, max_trades_per_day: 5, stop_loss_percent: 2.0, max_exposure_percent: 10.0, cooldown_minutes: 60, log_level: 'INFO'
+    interval: 300, test_mode: false,
+    pairs: 'SOL/USDT,ETH/USDT', timeframe: '15m', candle_count: 210,
+    pair_delay: 2, max_trades_per_day: 5, stop_loss_percent: 2.0, max_exposure_percent: 100.0, cooldown_minutes: 60, log_level: 'INFO',
+    ema_fast: 7, ema_slow: 30, adx_period: 14, adx_threshold: 25, invest_percentage: 75.0
   });
   const [isGlobalModalOpen, setIsGlobalModalOpen] = useState(false);
   const [statsUserId, setStatsUserId] = useState(null);
@@ -491,7 +490,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
       {/* ─── Top Bar ─── */}
       <nav className="topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span className="topbar-logo">AI TRADING HUB</span>
+          <span className="topbar-logo">TRADING HUB</span>
           {isAdmin && <span style={{ background: 'rgba(0,255,136,0.1)', color: '#00ff88', padding: '3px 10px', borderRadius: '6px', fontSize: '0.6rem', fontWeight: '700', letterSpacing: '0.5px' }}>ADMIN</span>}
           {!isAdmin && <span style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Hola, {username}</span>}
         </div>
@@ -643,35 +642,31 @@ function Dashboard({ userRole, userId, username, onLogout }) {
               <button onClick={() => setIsGlobalModalOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}><X size={24} /></button>
             </div>
             <form onSubmit={handleSaveGlobal} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '70vh', overflowY: 'auto', paddingRight: '10px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>PROVEEDOR IA</label>
-                  <select value={globalConfig.ai_provider} onChange={(e) => setGlobalConfig({ ...globalConfig, ai_provider: e.target.value })}>
-                    <option value="groq">Groq (Rápido)</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="gemini">Gemini (Google)</option>
-                    <option value="ollama">Ollama (Local)</option>
-                  </select>
+              <div style={{ padding: '12px', background: 'rgba(0,242,255,0.05)', borderRadius: '8px', border: '1px solid rgba(0,242,255,0.15)' }}>
+                <h3 style={{ fontSize: '0.8rem', color: '#00f2ff', marginBottom: '12px', fontWeight: '700' }}>ESTRATEGIA (EMA + ADX)</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>EMA FAST (Corto)</label>
+                    <input type="number" value={globalConfig.ema_fast} onChange={(e) => setGlobalConfig({ ...globalConfig, ema_fast: parseInt(e.target.value) })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>EMA SLOW (Largo)</label>
+                    <input type="number" value={globalConfig.ema_slow} onChange={(e) => setGlobalConfig({ ...globalConfig, ema_slow: parseInt(e.target.value) })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>% INVERSIÓN (0-100)</label>
+                    <input type="number" step="0.1" value={globalConfig.invest_percentage} onChange={(e) => setGlobalConfig({ ...globalConfig, invest_percentage: parseFloat(e.target.value) })} />
+                  </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>MODELO IA</label>
-                  <input value={globalConfig[`${globalConfig.ai_provider}_model`] || ''} onChange={(e) => setGlobalConfig({ ...globalConfig, [`${globalConfig.ai_provider}_model`]: e.target.value })} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>API KEY / HOST</label>
-                <input type={globalConfig.ai_provider === 'ollama' ? 'text' : 'password'} placeholder={globalConfig.ai_provider === 'ollama' ? "http://localhost:11434" : "Introduce la clave..."} value={globalConfig.ai_provider === 'ollama' ? globalConfig.ollama_host : (globalConfig[`${globalConfig.ai_provider === 'gemini' ? 'google' : globalConfig.ai_provider}_api_key`] || '')} onChange={(e) => { const key = globalConfig.ai_provider === 'ollama' ? 'ollama_host' : `${globalConfig.ai_provider === 'gemini' ? 'google' : globalConfig.ai_provider}_api_key`; setGlobalConfig({ ...globalConfig, [key]: e.target.value }); }} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>PARES</label>
-                  <input value={globalConfig.pairs} onChange={(e) => setGlobalConfig({ ...globalConfig, pairs: e.target.value })} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>TIMEFRAME</label>
-                  <select value={globalConfig.timeframe} onChange={(e) => setGlobalConfig({ ...globalConfig, timeframe: e.target.value })}>
-                    <option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
-                  </select>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>ADX PERIODO</label>
+                    <input type="number" value={globalConfig.adx_period} onChange={(e) => setGlobalConfig({ ...globalConfig, adx_period: parseInt(e.target.value) })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>ADX UMBRAL (Tendencia)</label>
+                    <input type="number" value={globalConfig.adx_threshold} onChange={(e) => setGlobalConfig({ ...globalConfig, adx_threshold: parseInt(e.target.value) })} />
+                  </div>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
@@ -680,16 +675,6 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                   <input type="number" value={globalConfig.candle_count} onChange={(e) => setGlobalConfig({ ...globalConfig, candle_count: parseInt(e.target.value) })} />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>PROMPT CANDLES</label>
-                  <input type="number" value={globalConfig.prompt_candles} onChange={(e) => setGlobalConfig({ ...globalConfig, prompt_candles: parseInt(e.target.value) })} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>UMBRAL CONFIANZA</label>
-                  <input type="number" step="0.1" value={globalConfig.confidence_threshold} onChange={(e) => setGlobalConfig({ ...globalConfig, confidence_threshold: parseFloat(e.target.value) })} />
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>INTERVALO (SEG)</label>
                   <input type="number" value={globalConfig.interval} onChange={(e) => setGlobalConfig({ ...globalConfig, interval: parseInt(e.target.value) })} />
                 </div>
@@ -697,16 +682,18 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>PAIR DELAY</label>
                   <input type="number" value={globalConfig.pair_delay} onChange={(e) => setGlobalConfig({ ...globalConfig, pair_delay: parseInt(e.target.value) })} />
                 </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>TRADES/DÍA</label>
                   <input type="number" value={globalConfig.max_trades_per_day} onChange={(e) => setGlobalConfig({ ...globalConfig, max_trades_per_day: parseInt(e.target.value) })} />
                 </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>STOP LOSS %</label>
                   <input type="number" step="0.1" value={globalConfig.stop_loss_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, stop_loss_percent: parseFloat(e.target.value) })} />
                 </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>MAX EXPOSICIÓN %</label>
                   <input type="number" step="0.1" value={globalConfig.max_exposure_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, max_exposure_percent: parseFloat(e.target.value) })} />

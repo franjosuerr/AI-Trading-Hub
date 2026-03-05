@@ -52,14 +52,12 @@ class AuthStatusResponse(BaseModel):
     needs_setup: bool
 
 class GlobalConfigBase(BaseModel):
-    ai_provider: str
     timeframe: str
     interval: int
     test_mode: bool
     pairs: str
     candle_count: int
-    prompt_candles: int
-    confidence_threshold: float
+
     stop_loss_percent: float
     max_trades_per_day: int
     pair_delay: int
@@ -67,17 +65,11 @@ class GlobalConfigBase(BaseModel):
     cooldown_minutes: int
     log_level: str
     
-    # API Keys
-    openai_api_key: Optional[str] = None
-    groq_api_key: Optional[str] = None
-    google_api_key: Optional[str] = None
-    ollama_host: Optional[str] = "http://localhost:11434"
-    
-    # Modelos
-    openai_model: Optional[str] = "gpt-4o-mini"
-    groq_model: Optional[str] = "llama-3.1-8b-instant"
-    gemini_model: Optional[str] = "gemini-2.0-flash"
-    ollama_model: Optional[str] = "llama2"
+    ema_fast: int
+    ema_slow: int
+    adx_period: int
+    adx_threshold: int
+    invest_percentage: float
 
 class GlobalConfigResponse(GlobalConfigBase):
     id: int

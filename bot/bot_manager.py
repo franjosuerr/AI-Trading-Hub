@@ -21,10 +21,7 @@ import pandas as pd
 
 # Módulos de trading originales (raíz del proyecto)
 from indicators import compute_all_indicators
-from ai_advisor import get_ai_signal
 from utils import (
-    format_candles_for_prompt,
-    format_context_summary,
     SIGNAL_LABEL_ES,
     round_to_precision,
 )
@@ -423,25 +420,15 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     test_mode = config.test_mode if config.test_mode is not None else True
     timeframe = config.timeframe or "15m"
     candle_count = config.candle_count or 210
-    prompt_candles = config.prompt_candles or 10
-    confidence_threshold = config.confidence_threshold or 0.7
     stop_loss = config.stop_loss_percent or 2.0
     pair_delay = config.pair_delay or 2
     max_trades = config.max_trades_per_day or 5
-
-    # Determinar proveedor y modelo de IA desde la config global
-    ai_provider = config.ai_provider or "groq"
-    ai_config = {
-        "provider": ai_provider,
-        "openai_api_key": config.openai_api_key or "",
-        "groq_api_key": config.groq_api_key or "",
-        "google_api_key": config.google_api_key or "",
-        "ollama_host": config.ollama_host or "http://localhost:11434",
-        "openai_model": config.openai_model or "gpt-4o-mini",
-        "groq_model": config.groq_model or "llama-3.1-8b-instant",
-        "gemini_model": config.gemini_model or "gemini-2.0-flash",
-        "ollama_model": config.ollama_model or "llama2",
-    }
+    
+    ema_fast_len = config.ema_fast or 7
+    ema_slow_len = config.ema_slow or 30
+    adx_period = config.adx_period or 14
+    adx_thresh = config.adx_threshold or 25
+    invest_pct = config.invest_percentage or 75.0
 
     cycle_start = datetime.utcnow().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
@@ -480,14 +467,17 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         )
 
         # 2. Indicadores técnicos
-        indicators = compute_all_indicators(df)
-        candles_text = format_candles_for_prompt(df, prompt_candles)
-        context_summary = format_context_summary(df, last_n=min(30, len(df)))
+        indicators_dict = compute_all_indicators(df)
+        
+        # Calcular los específicos para esta estrategia y añadirlos en df para vectorizarlos
+        from indicators import compute_ema, compute_adx
+        ema_fast = compute_ema(df["close"], ema_fast_len)
+        ema_slow = compute_ema(df["close"], ema_slow_len)
+        adx = compute_adx(df["high"], df["low"], df["close"], adx_period)
+        
         user_logger.info(
-            "Indicadores: RSI=%s MACD_line=%s MACD_signal=%s MACD_hist=%s SMA50=%s SMA200=%s BB_upper=%s BB_lower=%s volume=%s volume_avg=%s",
-            indicators.get("rsi"), indicators.get("macd_line"), indicators.get("macd_signal"),
-            indicators.get("macd_histogram"), indicators.get("sma50"), indicators.get("sma200"),
-            indicators.get("bb_upper"), indicators.get("bb_lower"), indicators.get("volume"), indicators.get("volume_avg")
+            "Indicadores Base: RSI=%s MACD=%s SMA200=%s",
+            indicators_dict.get("rsi"), indicators_dict.get("macd_line"), indicators_dict.get("sma200")
         )
 
         # 3. Precio actual
@@ -502,20 +492,54 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             _get_portfolio_for_pair, user.id, pair, balance_effective, current_price, user_logger
         )
 
-        # 4. Señal de la IA — pasar config directamente (thread-safe, sin importlib.reload)
-        signal_data = get_ai_signal(
-            pair, timeframe, candles_text, indicators, prompt_candles,
-            context_summary, current_price=current_price,
-            portfolio_context=portfolio_ctx, stop_loss_percent=stop_loss,
-            num_pairs=len(pairs),
-            ai_config=ai_config,
-            recent_signals=_signal_history.get((user.id, pair), []),
-        )
+        # 4. Lógica de Estrategia EMA Crossover
+        last_ema_fast = float(ema_fast.iloc[-1])
+        prev_ema_fast = float(ema_fast.iloc[-2])
+        last_ema_slow = float(ema_slow.iloc[-1])
+        prev_ema_slow = float(ema_slow.iloc[-2])
+        last_adx = float(adx.iloc[-1])
+        
+        last_gap = last_ema_fast - last_ema_slow
+        prev_gap = prev_ema_fast - prev_ema_slow
+        
+        holdings = portfolio_ctx.get("holdings", 0.0)
+        has_open_position = (holdings * current_price) > 5.0
+        
+        signal = "hold"
+        reason = "Esperando señal..."
+        amount_to_invest = 0.0
+        
+        if not has_open_position:
+            # Lógica Condición de COMPRA: cruce hacia arriba
+            if last_ema_fast > last_ema_slow and prev_ema_fast <= prev_ema_slow:
+                if last_adx > adx_thresh:
+                    signal = "buy"
+                    reason = f"Cruce EMA{ema_fast_len} > EMA{ema_slow_len} con ADX={last_adx:.1f} > {adx_thresh}"
+                    free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                    amount_to_invest = free_quote_now * (invest_pct / 100.0)
+                else:
+                    reason = f"Cruce EMA{ema_fast_len} > EMA{ema_slow_len} ignorado por tendencia débil (ADX={last_adx:.1f} <= {adx_thresh})"
+        else:
+            # Lógica Condición de VENTA
+            avg_price = portfolio_ctx.get("avg_price", 0.0)
+            pnl_percent = portfolio_ctx.get("pnl_percent", 0.0)
+            
+            if last_gap < prev_gap and current_price > avg_price:
+                signal = "sell"
+                reason = f"Gap reduciéndose ({last_gap:.4f} < {prev_gap:.4f}) y Profit del {pnl_percent:.2f}% asegurado"
+            elif pnl_percent <= -stop_loss:
+                signal = "sell"
+                reason = f"Stop Loss alcanzado: {pnl_percent:.2f}% <= -{stop_loss}%"
+            else:
+                reason = f"Hold Posición: Gap {last_gap:.4f} (prev: {prev_gap:.4f}), P&L: {pnl_percent:.2f}%"
 
-        if signal_data is None:
-            user_logger.warning("No se pudo obtener señal IA para %s.", pair)
-            errors_this_cycle.append(f"{pair}: sin señal IA")
-            continue
+        signal_data = {
+            "signal": signal,
+            "confidence": 1.0 if signal != "hold" else 0.0,
+            "reason": reason,
+            "amount_usdt": amount_to_invest,
+            "sell_percentage": 100.0
+        }
 
         # Guardar señal en historial para contexto futuro
         _signal_history[(user.id, pair)].append({
@@ -527,16 +551,11 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         if len(_signal_history[(user.id, pair)]) > MAX_SIGNAL_HISTORY:
             _signal_history[(user.id, pair)] = _signal_history[(user.id, pair)][-MAX_SIGNAL_HISTORY:]
 
-        # Log de señal con montos decididos por la IA
-        amount_info = ""
-        if signal_data["signal"] == "buy" and "amount_usdt" in signal_data:
-            amount_info = f" | monto_usdt={signal_data['amount_usdt']:.4f}"
-        elif signal_data["signal"] == "sell" and "sell_percentage" in signal_data:
-            amount_info = f" | vender={signal_data['sell_percentage']:.1f}%"
+        # Log de señal
         user_logger.info(
-            "Señal IA: señal=%s confianza=%s%s razón=%s",
+            "Señal Estrategia: señal=%s confianza=%s razón=%s",
             SIGNAL_LABEL_ES.get(signal_data["signal"], signal_data["signal"]),
-            signal_data["confidence"], amount_info, signal_data["reason"]
+            signal_data["confidence"], signal_data["reason"]
         )
 
         # Datos para Telegram
@@ -546,48 +565,17 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             "price": current_price,
             "last_close": float(last.get("close")) if last.get("close") is not None else None,
             "volume": float(last.get("volume", 0)),
-            "rsi": indicators.get("rsi"), "macd_histogram": indicators.get("macd_histogram"),
-            "sma50": indicators.get("sma50"), "sma200": indicators.get("sma200"),
+            "ema_fast": last_ema_fast, "ema_slow": last_ema_slow, "adx": last_adx,
         })
 
         # 5. ¿Ejecutar orden?
         if signal_data["signal"] not in ("buy", "sell"):
             user_logger.info("Sin orden: señal es %s (solo comprar/vender ejecutan).", SIGNAL_LABEL_ES.get(signal_data["signal"], signal_data["signal"]))
             continue
-        if signal_data["confidence"] < confidence_threshold:
-            user_logger.info("Sin orden: confianza %.2f < umbral %.2f para %s.", signal_data["confidence"], confidence_threshold, pair)
+        if signal_data["confidence"] < 0.7:
+            # Para la estrategia técnica, la confianza es 1.0 si hay señal, o 0.0 si es hold.
+            # Por lo tanto, si es menor a 0.7 (es 0.0), no hacemos nada
             continue
-
-        # --- FILTROS DE SANIDAD (Anti-Alucinaciones) ---
-        # 1. Bloqueo de compras con RSI alto (evita comprar picos)
-        # ----------------------------------------------------
-        curr_rsi = indicators.get("rsi")
-        if signal_data["signal"] == "buy" and curr_rsi is not None and curr_rsi > 60:
-            user_logger.warning("⛔ COMPRA BLOQUEADA POR RIESGO: RSI=%.2f (>60). La IA está ignorando sobrecompra.", curr_rsi)
-            # Solo permitimos comprar con RSI alto si es "DCA extremo" (promediando a la baja precio muy lejano), pero por defecto bloqueamos.
-            errors_this_cycle.append(f"{pair}: Compra bloqueada (RSI {curr_rsi:.1f} > 60)")
-            continue
-
-        # 2. Bloqueo de ventas por "pánico falso" (Verificar P&L real)
-        # ----------------------------------------------------
-        if signal_data["signal"] == "sell":
-            reason_lower = signal_data.get("reason", "").lower()
-            # Si el motivo es pérdida/stop-loss, verificamos que sea real y significativa
-            if "pérdida" in reason_lower or "loss" in reason_lower or "stop" in reason_lower:
-                # portfolio_ctx tiene la info real
-                # Ejemplo de portfolio_ctx: {'holdings': ..., 'pnl_percent': -0.45, ...}
-                real_pnl = portfolio_ctx.get("pnl_percent", 0.0)
-                sl_limit = -(stop_loss or 2.0) # default -2.0%
-                
-                # Si la pérdida es pequeña (ej. -0.5%) y el límite es -2.0%, NO vender por pánico
-                if real_pnl > sl_limit: 
-                    # Pero CUIDADO: si el RSI está explotando (>75), tal vez sí hay que vender.
-                    if curr_rsi is not None and curr_rsi > 75:
-                        user_logger.info("Venta permitida por RSI extremo (%.1f) aunque P&L sea pequeño (%.2f%%).", curr_rsi, real_pnl)
-                    else:
-                        user_logger.warning("⛔ VENTA BLOQUEADA: IA dice 'Pérdida' pero P&L actual es %.2f%% (Stop-Loss es %.1f%%). Falsa alarma.", real_pnl, sl_limit)
-                        errors_this_cycle.append(f"{pair}: Venta pánico bloqueada (P&L {real_pnl:.2f}%)")
-                        continue
 
         # Verificar límite de trades diarios por par (solo bloquea COMPRAS, ventas siempre permitidas)
         try:
@@ -626,16 +614,16 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 continue
 
             # LÍMITE DE INVERSIÓN TOTAL: No exceder la exposición máxima
-            max_exposure = config.max_exposure_percent or 10.0
+            max_exposure = config.max_exposure_percent or 100.0  # Por defecto 100% para la nueva estrategia
             invested_pct = await asyncio.to_thread(
                 _get_total_invested_percentage, user.id, pairs, balance_effective, exchange, user_logger
             )
             if invested_pct >= max_exposure:
                 user_logger.warning(
-                    "Portafolio ya %.1f%% invertido (límite %.1f%%). No se compra más %s. Esperando señales de venta.",
-                    invested_pct, max_exposure, pair
+                    "Portafolio ya %.1f%% invertido (límite %.1f%%). No se admiten nuevas compras.",
+                    invested_pct, max_exposure
                 )
-                errors_this_cycle.append(f"{pair}: portafolio >{max_exposure}% invertido, compra bloqueada")
+                errors_this_cycle.append(f"{pair}: portafolio >{max_exposure}% invertido")
                 continue
 
         # Calcular monto dinámico decidido por la IA
@@ -644,11 +632,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         balance_now_effective = _get_effective_balance(user.id, balance_now, test_mode)
 
         if signal_data["signal"] == "buy":
-            # La IA decide cuántos USDT invertir → convertir a moneda base
             amount_usdt = signal_data.get("amount_usdt", 0)
             if amount_usdt <= 0 or not current_price or current_price <= 0:
-                user_logger.warning("La IA no especificó monto válido para comprar %s (amount_usdt=%.4f).", pair, amount_usdt)
-                errors_this_cycle.append(f"{pair}: monto IA inválido para compra")
+                user_logger.warning("La estrategia no especificó monto válido para comprar %s (amount_usdt=%.4f).", pair, amount_usdt)
+                errors_this_cycle.append(f"{pair}: monto inválido para compra")
                 continue
 
             # Verificar saldo (virtual en test mode, real en producción)
@@ -665,16 +652,13 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 errors_this_cycle.append(f"{pair}: balance {quote_currency} < 5")
                 continue
 
-            # SEGURIDAD: forzar el límite de 30% del balance disponible (no confiar solo en la IA)
-            max_allowed = free_quote_now * 0.30
-            if amount_usdt > max_allowed:
+            # Comprobar límite de balance
+            if amount_usdt > free_quote_now:
                 user_logger.warning(
-                    "IA sugirió %.4f %s (%.1f%% del balance) — limitando a 30%%: %.4f %s.",
-                    amount_usdt, quote_currency,
-                    (amount_usdt / free_quote_now * 100) if free_quote_now > 0 else 0,
-                    max_allowed, quote_currency,
+                    "Monto calculado %.4f mayor a saldo libre %.4f. Ajustando límite de inversión.",
+                    amount_usdt, free_quote_now
                 )
-                amount_usdt = max_allowed
+                amount_usdt = free_quote_now
 
             # Limitar al saldo disponible real (segunda capa de seguridad)
             if amount_usdt > free_quote_now * 0.95:
@@ -698,7 +682,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             )
 
         elif signal_data["signal"] == "sell":
-            # La IA decide qué porcentaje de la posición vender
+            # Decidimos qué porcentaje de la posición vender
             sell_pct = signal_data.get("sell_percentage", 100)
             free_base_now = 0.0
             if balance_now_effective and base_currency in balance_now_effective:
