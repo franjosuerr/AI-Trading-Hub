@@ -10,14 +10,14 @@ from config import (
     PAIRS,
     TIMEFRAME,
     CANDLE_COUNT,
-    PROMPT_CANDLES,
-    CONFIDENCE_THRESHOLD,
     INTERVAL,
     PAIR_DELAY,
     TEST_MODE,
     MAX_TRADES_PER_DAY_PER_PAIR,
     STOP_LOSS_PERCENT,
 )
+from datetime import datetime, timedelta
+
 from logger_config import setup_logging, get_logger
 from exchange_client import (
     create_exchange,
@@ -28,7 +28,6 @@ from exchange_client import (
     format_balance_one_line,
 )
 from indicators import compute_all_indicators
-from ai_advisor import get_ai_signal
 from telegram_notifier import (
     notify_startup,
     notify_signals_cycle,
@@ -36,7 +35,7 @@ from telegram_notifier import (
     notify_critical_error,
     notify_cycle_summary,
 )
-from utils import format_candles_for_prompt, format_context_summary, SIGNAL_LABEL_ES
+from utils import SIGNAL_LABEL_ES
 
 # Contador de trades por par por día (para límite de seguridad)
 _trades_today: dict[str, list[datetime]] = defaultdict(list)
@@ -121,8 +120,6 @@ def run_cycle(exchange, logger):
 
         # 2. Indicadores
         indicators = compute_all_indicators(df)
-        candles_text = format_candles_for_prompt(df, PROMPT_CANDLES)
-        context_summary = format_context_summary(df, last_n=min(30, len(df)))
         logger.info(
             "Indicadores: RSI=%s MACD_line=%s MACD_signal=%s MACD_hist=%s SMA50=%s SMA200=%s BB_upper=%s BB_lower=%s volume=%s volume_avg=%s",
             indicators.get("rsi"),
@@ -168,26 +165,18 @@ def run_cycle(exchange, logger):
             "total_trades_sell": 0,
         }
 
-        # 3. Señal de la IA (con portafolio completo, decide monto)
-        signal_data = get_ai_signal(
-            pair,
-            TIMEFRAME,
-            candles_text,
-            indicators,
-            PROMPT_CANDLES,
-            context_summary,
-            current_price=current_price,
-            portfolio_context=portfolio_context,
-            stop_loss_percent=STOP_LOSS_PERCENT,
-            num_pairs=len(PAIRS),
-        )
-        if signal_data is None:
-            logger.warning("No se pudo obtener señal IA para %s.", pair)
-            errors_this_cycle.append(f"{pair}: sin señal IA")
-            continue
+        # 3. Señal de la Estrategia (Stub)
+        # TODO: Implementar estrategia propia aquí.
+        signal_data = {
+            "signal": "hold",
+            "confidence": 0.0,
+            "reason": "Esperando nueva estrategia (IA removida)",
+            "amount_usdt": 0.0,
+            "sell_percentage": 0.0
+        }
 
         logger.info(
-            "Señal IA: señal=%s confianza=%s razón=%s",
+            "Señal Estrategia: señal=%s confianza=%s razón=%s",
             SIGNAL_LABEL_ES.get(signal_data["signal"], signal_data["signal"]),
             signal_data["confidence"],
             signal_data["reason"],
@@ -212,11 +201,11 @@ def run_cycle(exchange, logger):
         if signal_data["signal"] not in ("buy", "sell"):
             logger.info("Sin orden: señal es %s (solo comprar/vender ejecutan).", SIGNAL_LABEL_ES.get(signal_data["signal"], signal_data["signal"]))
             continue
-        if signal_data["confidence"] < CONFIDENCE_THRESHOLD:
+        if signal_data["confidence"] < 0.7:
             logger.info(
                 "Sin orden: confianza %.2f < umbral %.2f para %s.",
                 signal_data["confidence"],
-                CONFIDENCE_THRESHOLD,
+                0.7,
                 pair,
             )
             continue
@@ -231,7 +220,7 @@ def run_cycle(exchange, logger):
         if signal_data["signal"] == "buy":
             amount_usdt = signal_data.get("amount_usdt", 0)
             if amount_usdt <= 0 or not current_price or current_price <= 0:
-                logger.warning("La IA no especificó monto válido para comprar %s.", pair)
+                logger.warning("La estrategia no especificó monto válido para comprar %s.", pair)
                 continue
             # Verificar saldo real
             balance_now = fetch_balance(exchange, PAIRS)
@@ -245,7 +234,7 @@ def run_cycle(exchange, logger):
                 errors_this_cycle.append(f"{pair}: saldo insuficiente")
                 continue
             amount = amount_usdt / current_price
-            logger.info("IA decidió invertir %.4f %s en %s → %.8f %s", amount_usdt, quote_currency, pair, amount, base_currency)
+            logger.info("Estrategia decidió invertir %.4f %s en %s → %.8f %s", amount_usdt, quote_currency, pair, amount, base_currency)
 
         elif signal_data["signal"] == "sell":
             sell_pct = signal_data.get("sell_percentage", 100)
@@ -258,7 +247,7 @@ def run_cycle(exchange, logger):
                 errors_this_cycle.append(f"{pair}: sin {base_currency} para vender")
                 continue
             amount = free_base_now * (sell_pct / 100.0)
-            logger.info("IA decidió vender %.1f%% de %s → %.8f %s", sell_pct, pair, amount, base_currency)
+            logger.info("Estrategia decidió vender %.1f%% de %s → %.8f %s", sell_pct, pair, amount, base_currency)
 
         if amount <= 0:
             logger.warning("Monto calculado es 0 para %s.", pair)

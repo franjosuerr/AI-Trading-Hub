@@ -13,19 +13,7 @@ load_dotenv(dotenv_path=_env_path)
 COINEX_API_KEY = os.getenv("COINEX_API_KEY", "")
 COINEX_SECRET = os.getenv("COINEX_SECRET", "")
 
-# --- IA: proveedor y claves (puedes usar Groq, Gemini u Ollama sin pagar OpenAI) ---
-# Proveedor: openai | groq | gemini | ollama
-AI_PROVIDER = os.getenv("AI_PROVIDER", "groq").strip().lower()
-if AI_PROVIDER not in ("openai", "groq", "gemini", "ollama"):
-    AI_PROVIDER = "groq"
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")  # Gemini en Google AI Studio
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip().rstrip("/")
-
-# Modelo por proveedor (solo se usa el del proveedor activo)
-AI_MODEL = os.getenv("AI_MODEL", "").strip() or None  # Si vacío, se usa el default del proveedor
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -45,11 +33,7 @@ TIMEFRAME = os.getenv("TIMEFRAME", "1h")
 # --- Cantidad de velas a obtener y analizar (más velas = indicadores MACD/SMA200 correctos) ---
 CANDLE_COUNT = int(os.getenv("CANDLE_COUNT", "50"))
 
-# --- Cantidad de velas recientes a incluir en el prompt a la IA (más = mejor contexto, más tokens) ---
-PROMPT_CANDLES = int(os.getenv("PROMPT_CANDLES", "10"))
 
-# --- Umbral de confianza (0-1): solo ejecutar orden si confidence >= este valor ---
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.7"))
 
 # --- Intervalo entre ciclos completos de análisis (segundos) ---
 INTERVAL = int(os.getenv("INTERVAL", "300"))
@@ -63,13 +47,6 @@ MAX_TRADES_PER_DAY_PER_PAIR = int(os.getenv("MAX_TRADES_PER_DAY_PER_PAIR", "5"))
 # --- Stop-loss simple: porcentaje bajo el precio de entrada para vender ---
 STOP_LOSS_PERCENT = float(os.getenv("STOP_LOSS_PERCENT", "2.0"))
 
-# Modelo por proveedor (solo si quieres sobreescribir el default)
-# OpenAI: gpt-4o-mini, gpt-4o | Groq: llama-3.1-8b-instant, llama-3.3-70b-versatile | Gemini: gemini-1.5-flash | Ollama: llama2, mistral
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-# En Google AI Studio los nombres pueden variar; si da 404 prueba gemini-2.0-flash o gemini-pro
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama2")
 
 # --- Logs: ruta y rotación ---
 # Directorio donde se guardan los archivos de log (se crea si no existe)

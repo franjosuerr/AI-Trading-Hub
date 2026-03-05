@@ -95,12 +95,16 @@ def notify_signals_cycle(signals: list) -> bool:
         price_str = f" | Precio: {price}" if price is not None else ""
         rsi = s.get("rsi")
         rsi_str = f" RSI: {float(rsi):.1f}" if rsi is not None else ""
-        sma50 = s.get("sma50")
-        sma50_str = f" SMA50: {sma50}" if sma50 is not None else ""
+        ema_fast = s.get("ema_fast")
+        ema_fast_str = f" EMAF: {ema_fast:.2f}" if ema_fast is not None else ""
+        ema_slow = s.get("ema_slow")
+        ema_slow_str = f" EMAS: {ema_slow:.2f}" if ema_slow is not None else ""
+        adx = s.get("adx")
+        adx_str = f" ADX: {adx:.1f}" if adx is not None else ""
         last_close = s.get("last_close")
         close_str = f" Cierre: {last_close}" if last_close is not None else ""
         lines.append(
-            f"• <b>{pair}</b>: {signal_es.upper()} (confianza: {conf:.2f}){price_str}{rsi_str}{sma50_str}{close_str}\n  → {reason}"
+            f"• <b>{pair}</b>: {signal_es.upper()} (confianza: {conf:.2f}){price_str}{rsi_str}{ema_fast_str}{ema_slow_str}{adx_str}{close_str}\n  → {reason}"
         )
     msg = "\n".join(lines)
     return send_telegram_message(msg)
