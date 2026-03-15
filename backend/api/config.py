@@ -36,7 +36,7 @@ def get_config(db: Session = Depends(get_db)):
             stop_loss_percent=3.0,
             risk_profile="conservador",
             use_vwap_filter=True,
-            use_daily_open_filter=True
+            use_daily_open_filter=False
         )
         db.add(config)
         db.commit()
