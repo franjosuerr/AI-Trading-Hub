@@ -33,7 +33,10 @@ def get_config(db: Session = Depends(get_db)):
             trailing_stop_activation=1.5,
             trailing_stop_distance=0.5,
             macro_timeframe="1h",
-            stop_loss_percent=3.0
+            stop_loss_percent=3.0,
+            risk_profile="conservador",
+            use_vwap_filter=True,
+            use_daily_open_filter=True
         )
         db.add(config)
         db.commit()

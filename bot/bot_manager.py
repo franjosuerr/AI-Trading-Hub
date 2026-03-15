@@ -435,6 +435,9 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     trailing_activation = getattr(config, "trailing_stop_activation", 1.5)
     trailing_distance = getattr(config, "trailing_stop_distance", 0.5)
     macro_tf = getattr(config, "macro_timeframe", "1h")
+    risk_profile = getattr(config, "risk_profile", "conservador")
+    use_vwap = getattr(config, "use_vwap_filter", False)
+    use_daily = getattr(config, "use_daily_open_filter", False)
 
     cycle_start = datetime.utcnow().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
@@ -488,25 +491,37 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         last_rsi = float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0
         last_bb_upper = float(bb_upper.iloc[-1])
         last_bb_mid = float(bb_mid.iloc[-1])
-        last_bb_lower = float(bb_lower.iloc[-1])
-        last_ema_200 = float(ema_200.iloc[-1])
-        last_volume = float(df["volume"].iloc[-1]) if "volume" in df.columns else 0
-        last_vol_avg = float(vol_avg_series.iloc[-1]) if not pd.isna(vol_avg_series.iloc[-1]) else 0
-        volume_ok = last_volume >= last_vol_avg  # Volumen por encima del promedio
-        price_above_ema200 = current_price is not None and current_price > last_ema_200
+        # 3. Precio actual
+        current_price = await asyncio.to_thread(_fetch_ticker_price, exchange, pair, user_logger)
+        if current_price is not None:
+            user_logger.info("Precio actual (ticker) %s: %s", pair, current_price)
+
+        # Extract indicators from dict (or compute if not present, for backward compatibility)
+        last_rsi = indicators_dict.get("rsi") or (float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0)
+        last_bb_upper = indicators_dict.get("bb_upper") or float(bb_upper.iloc[-1])
+        last_bb_mid = indicators_dict.get("bb_mid") or float(bb_mid.iloc[-1])
+        last_bb_lower = indicators_dict.get("bb_lower") or float(bb_lower.iloc[-1])
+        last_ema_200 = indicators_dict.get("ema200") or float(ema_200.iloc[-1])
+        last_volume = indicators_dict.get("volume") or (float(df["volume"].iloc[-1]) if "volume" in df.columns else 0)
+        last_vol_avg = indicators_dict.get("volume_avg") or (float(vol_avg_series.iloc[-1]) if not pd.isna(vol_avg_series.iloc[-1]) else 0)
         
+        last_vwap = indicators_dict.get("vwap") or 0.0
+        last_daily_open = indicators_dict.get("daily_open") or 0.0
+        
+        price_above_ema200 = (current_price > last_ema_200) if current_price else True
+        volume_ok = (last_volume > last_vol_avg)
+                
         user_logger.info(
-            "Indicadores: RSI=%.1f MACD=%.4f ADX=%.1f BB=[%.2f/%.2f/%.2f] EMA200=%.2f Vol=%s(avg=%.0f)",
+            "Últimos indicadores - RSI: %.1f | MACD: %.4f | ADX: %.1f | BB(L,M,U): %.2f, %.2f, %.2f | EMA200: %.2f | VOL:%s(avg=%.0f) | VWAP:%.2f | DailyOpen:%.2f",
             last_rsi,
             indicators_dict.get("macd_line") or 0,
             float(adx.iloc[-1]),
             last_bb_lower, last_bb_mid, last_bb_upper,
             last_ema_200,
-            "OK" if volume_ok else "BAJO", last_vol_avg
+            "OK" if volume_ok else "BAJO", last_vol_avg,
+            last_vwap, last_daily_open
         )
 
-        # 3. Precio actual
-        current_price = await asyncio.to_thread(_fetch_ticker_price, exchange, pair, user_logger)
         if current_price is not None:
             user_logger.info("Precio actual (ticker) %s: %s", pair, current_price)
 
@@ -568,16 +583,37 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 is_uptrend = last_ema_fast > last_ema_slow
                 is_pullback = current_price is not None and current_price <= (last_ema_fast * 1.005)
                 
-                if is_uptrend and is_pullback and macro_uptrend and price_above_ema200 and volume_ok:
-                    signal = "buy"
-                    reason = f"[{regime}] Pullback alcista (ADX={last_adx:.1f}, P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f}, Macro=OK, EMA200=OK, Vol=OK)"
-                    free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
-                    amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
-                elif is_uptrend and not macro_uptrend:
+                # Bypasses según Perfil de Riesgo
+                use_macro = risk_profile not in ["muy_agresivo"]
+                use_ema200 = risk_profile not in ["agresivo", "muy_agresivo"]
+                use_vol = risk_profile not in ["agresivo", "muy_agresivo"]
+                
+                macro_pass = macro_uptrend if use_macro else True
+                ema200_pass = price_above_ema200 if use_ema200 else True
+                vol_pass = volume_ok if use_vol else True
+                
+                if is_uptrend and is_pullback and macro_pass and ema200_pass and vol_pass:
+                    blocked = False
+                    block_reason = ""
+                    if use_vwap and current_price < last_vwap:
+                        blocked = True
+                        block_reason = f"VWAP (P={current_price} < {last_vwap:.2f})"
+                    if use_daily and current_price < last_daily_open:
+                        blocked = True
+                        block_reason = f"Daily Open (P={current_price} < {last_daily_open:.2f})"
+                        
+                    if blocked:
+                        reason = f"[{regime}] Pullback alcista bloqueado por filtro intradiario: {block_reason}"
+                    else:
+                        signal = "buy"
+                        reason = f"[{regime}] Pullback alcista (ADX={last_adx:.1f}, P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f}, RIESGO={risk_profile.upper()})"
+                        free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                        amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
+                elif is_uptrend and not macro_pass:
                     reason = f"[{regime}] Tendencia alcista pero Macro {macro_tf} bajista. Compra bloqueada."
-                elif is_uptrend and not price_above_ema200:
-                    reason = f"[{regime}] Tendencia alcista pero P={current_price} < EMA200={last_ema_200:.2f}. Compra bloqueada (macro bajista)."
-                elif is_uptrend and not volume_ok:
+                elif is_uptrend and not ema200_pass:
+                    reason = f"[{regime}] Tendencia alcista pero P={current_price} < EMA200={last_ema_200:.2f}. Compra bloqueada."
+                elif is_uptrend and not vol_pass:
                     reason = f"[{regime}] Tendencia alcista pero volumen bajo ({last_volume:.0f} < avg {last_vol_avg:.0f}). Esperando confirmación."
                 elif is_uptrend:
                     reason = f"[{regime}] Tendencia alcista (ADX={last_adx:.1f}) sin pullback (P={current_price} > EMA_fast={last_ema_fast:.2f})"
@@ -590,10 +626,22 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.002  # 0.2% margen
                 
                 if is_oversold and is_at_bb_lower:
-                    signal = "buy"
-                    reason = f"[{regime}] Mean Reversion: RSI={last_rsi:.1f}<35 + Precio={current_price} <= BB_lower={last_bb_lower:.2f} (oversold en rango)"
-                    free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
-                    amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
+                    blocked = False
+                    block_reason = ""
+                    if use_vwap and current_price < last_vwap:
+                        blocked = True
+                        block_reason = f"VWAP ({current_price} < {last_vwap:.2f})"
+                    if use_daily and current_price < last_daily_open:
+                        blocked = True
+                        block_reason = f"Daily Open ({current_price} < {last_daily_open:.2f})"
+                        
+                    if blocked:
+                        reason = f"[{regime}] Mean Reversion bloqueado por filtro bajista intradiario: {block_reason}"
+                    else:
+                        signal = "buy"
+                        reason = f"[{regime}] Mean Reversion: RSI={last_rsi:.1f}<35 + Precio={current_price} <= BB_lower={last_bb_lower:.2f} (oversold en rango)"
+                        free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                        amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
                 elif is_oversold:
                     reason = f"[{regime}] RSI oversold ({last_rsi:.1f}) pero precio {current_price} aún sobre BB_lower {last_bb_lower:.2f}"
                 elif is_at_bb_lower:

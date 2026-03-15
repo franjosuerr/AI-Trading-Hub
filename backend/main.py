@@ -60,6 +60,21 @@ def auto_migrate_db():
                 logger.info("Pares actualizados: añadidos BTC/USDT y XRP/USDT.")
         except Exception:
             pass
+            
+        # Migración: Perfil de Riesgo
+        try:
+            cursor.execute("ALTER TABLE global_config ADD COLUMN risk_profile VARCHAR DEFAULT 'conservador'")
+            logger.info("Columna 'risk_profile' agregada.")
+        except sqlite3.OperationalError:
+            pass # Ya existe
+            
+        # Migración: Intraday Filters
+        try:
+            cursor.execute('ALTER TABLE global_config ADD COLUMN use_vwap_filter BOOLEAN DEFAULT 0')
+            cursor.execute('ALTER TABLE global_config ADD COLUMN use_daily_open_filter BOOLEAN DEFAULT 0')
+            logger.info("Columnas 'use_vwap_filter' y 'use_daily_open_filter' agregadas.")
+        except sqlite3.OperationalError:
+            pass # Ya existen
         
         # Migración: ajustar invest_percentage de 75% a 25% (position sizing conservador)
         try:

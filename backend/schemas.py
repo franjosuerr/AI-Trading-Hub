@@ -75,6 +75,10 @@ class GlobalConfigBase(BaseModel):
     trailing_stop_activation: float
     trailing_stop_distance: float
     macro_timeframe: str
+    risk_profile: str
+    
+    use_vwap_filter: bool
+    use_daily_open_filter: bool
 
 class GlobalConfigResponse(GlobalConfigBase):
     id: int
