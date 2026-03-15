@@ -389,7 +389,8 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     interval: 300, test_mode: false,
     pairs: 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT', timeframe: '15m', candle_count: 350,
     pair_delay: 2, max_trades_per_day: 10, stop_loss_percent: 3.0, max_exposure_percent: 80.0, cooldown_minutes: 120, log_level: 'INFO',
-    ema_fast: 7, ema_slow: 30, adx_period: 14, adx_threshold: 25, invest_percentage: 25.0, invest_percentage_ranging: 15.0
+    ema_fast: 7, ema_slow: 30, adx_period: 14, adx_threshold: 25, invest_percentage: 25.0, invest_percentage_ranging: 15.0, risk_profile: 'suave',
+    use_vwap_filter: true, use_daily_open_filter: true
   });
   const [isGlobalModalOpen, setIsGlobalModalOpen] = useState(false);
   const [statsUserId, setStatsUserId] = useState(null);
@@ -465,6 +466,21 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     e.preventDefault();
     try { await api.post('/config/', globalConfig); setIsGlobalModalOpen(false); fetchData(); }
     catch (error) { alert(error.response?.data?.detail || "Error al guardar configuración"); }
+  };
+
+  const handleRiskChange = (e) => {
+    const profile = e.target.value;
+    let overrides = { risk_profile: profile };
+    if (profile === 'suave') {
+      overrides = { ...overrides, invest_percentage: 10.0, invest_percentage_ranging: 5.0, ema_fast: 12, ema_slow: 26, stop_loss_percent: 2.0, trailing_stop_activation: 1.5, trailing_stop_distance: 0.5 };
+    } else if (profile === 'conservador') {
+      overrides = { ...overrides, invest_percentage: 25.0, invest_percentage_ranging: 15.0, ema_fast: 7, ema_slow: 30, stop_loss_percent: 3.0, trailing_stop_activation: 1.5, trailing_stop_distance: 0.5 };
+    } else if (profile === 'agresivo') {
+      overrides = { ...overrides, invest_percentage: 50.0, invest_percentage_ranging: 30.0, ema_fast: 5, ema_slow: 20, stop_loss_percent: 4.0, trailing_stop_activation: 2.0, trailing_stop_distance: 1.0 };
+    } else if (profile === 'muy_agresivo') {
+      overrides = { ...overrides, invest_percentage: 90.0, invest_percentage_ranging: 50.0, ema_fast: 3, ema_slow: 10, stop_loss_percent: 6.0, trailing_stop_activation: 3.0, trailing_stop_distance: 1.5 };
+    }
+    setGlobalConfig({ ...globalConfig, ...overrides });
   };
 
   const downloadLog = async (uid, uname) => {
@@ -642,6 +658,25 @@ function Dashboard({ userRole, userId, username, onLogout }) {
               <button onClick={() => setIsGlobalModalOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}><X size={24} /></button>
             </div>
             <form onSubmit={handleSaveGlobal} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '70vh', overflowY: 'auto', paddingRight: '10px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '15px', background: 'linear-gradient(135deg, rgba(0, 242, 255, 0.05), rgba(112, 0, 255, 0.05))', borderRadius: '12px', border: '1px solid rgba(0, 242, 255, 0.2)' }}>
+                <label style={{ fontSize: '0.85rem', color: '#00f2ff', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <TrendingUp size={16} /> PERFIL DE RIESGO DEL BOT
+                </label>
+                <select 
+                  value={globalConfig.risk_profile} 
+                  onChange={handleRiskChange}
+                  style={{ padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', fontSize: '1rem', fontWeight: '600' }}
+                >
+                  <option value="suave">🟢 Suave (Bajo Beneficio / Bajo Riesgo)</option>
+                  <option value="conservador">🔵 Conservador (Recomendado)</option>
+                  <option value="agresivo">🟠 Agresivo (Alto Capital / Rápido)</option>
+                  <option value="muy_agresivo">🔴 Muy Agresivo (ALL IN / Filtros Apagados)</option>
+                  <option value="personalizado">⚙️ Personalizado (Ajuste Manual)</option>
+                </select>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '4px' }}>
+                  Al seleccionar un perfil, los parámetros debajo se auto-ajustarán y los filtros anti-caída variarán.
+                </div>
+              </div>
               <div style={{ padding: '12px', background: 'rgba(0,242,255,0.05)', borderRadius: '8px', border: '1px solid rgba(0,242,255,0.15)' }}>
                 <h3 style={{ fontSize: '0.8rem', color: '#00f2ff', marginBottom: '12px', fontWeight: '700' }}>ESTRATEGIA DUAL (Tendencia + Rango)</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '12px' }}>
@@ -707,6 +742,25 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>COOLDOWN (MIN)</label>
                   <input type="number" value={globalConfig.cooldown_minutes} onChange={(e) => setGlobalConfig({ ...globalConfig, cooldown_minutes: parseInt(e.target.value) })} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'rgba(255,170,0,0.05)', padding: '15px', borderRadius: '12px', border: '1px solid rgba(255,170,0,0.2)' }}>
+                <label style={{ fontSize: '0.85rem', color: '#ffaa00', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Shield size={16} /> FILTROS DAY-TRADING INTRADIARIOS (Protección Mercados Bajistas)
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <input type="checkbox" id="useVwap" checked={globalConfig.use_vwap_filter} onChange={(e) => setGlobalConfig({ ...globalConfig, use_vwap_filter: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ffaa00' }} />
+                  <div>
+                    <label htmlFor="useVwap" style={{ fontWeight: '600', color: 'white' }}>Solo comprar por encima del VWAP Diario</label>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Evita falsos rebotes donde los institucionales tienen posición de venta.</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <input type="checkbox" id="useDailyOpen" checked={globalConfig.use_daily_open_filter} onChange={(e) => setGlobalConfig({ ...globalConfig, use_daily_open_filter: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ffaa00' }} />
+                  <div>
+                    <label htmlFor="useDailyOpen" style={{ fontWeight: '600', color: 'white' }}>Solo comprar si el Día Actual es Verde (Sobre Apertura)</label>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>No invierte nada si el token está cayendo a nivel intradiario (00:00 UTC).</div>
+                  </div>
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(0,255,136,0.05)', padding: '15px', borderRadius: '12px', border: '1px solid rgba(0,255,136,0.2)' }}>

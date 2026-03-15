@@ -106,6 +106,43 @@ def compute_volume_avg(volume: pd.Series, period: int = 20) -> pd.Series:
     return volume.rolling(window=period, min_periods=1).mean()
 
 
+def compute_vwap(df: pd.DataFrame) -> pd.Series:
+    """VWAP (Volume Weighted Average Price) anclado al inicio de cada día."""
+    required = ["high", "low", "close", "volume"]
+    if not all(col in df.columns for col in required):
+        return pd.Series([0] * len(df), index=df.index)
+        
+    if "datetime" in df.columns:
+        date_group = df["datetime"].dt.date
+    elif isinstance(df.index, pd.DatetimeIndex):
+        date_group = df.index.date
+    else:
+        # No se puede anclar por día, usar acumulado total (fallback)
+        date_group = [1] * len(df)
+        
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    tp_v = typical_price * df["volume"]
+    
+    vwap = tp_v.groupby(date_group).cumsum() / df["volume"].groupby(date_group).cumsum()
+    return vwap
+
+
+def compute_daily_open(df: pd.DataFrame) -> pd.Series:
+    """Saca la apertura (open) del primer periodo del día y la propaga por todo el día."""
+    if "open" not in df.columns:
+        return pd.Series([0] * len(df), index=df.index)
+        
+    if "datetime" in df.columns:
+        date_group = df["datetime"].dt.date
+    elif isinstance(df.index, pd.DatetimeIndex):
+        date_group = df.index.date
+    else:
+        date_group = [1] * len(df)
+        
+    daily_open = df["open"].groupby(date_group).transform("first")
+    return daily_open
+
+
 def compute_all_indicators(df: pd.DataFrame) -> dict:
     """
     Dado un DataFrame con columnas: open, high, low, close, volume (y opcional timestamp),
@@ -124,6 +161,9 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     ema200 = compute_ema(close, 200)
     bb_upper, bb_mid, bb_lower = compute_bollinger_bands(close, 20, 2.0)
     vol_avg = compute_volume_avg(volume, 20)
+    
+    vwap = compute_vwap(df)
+    daily_open = compute_daily_open(df)
 
     # Valores de la última vela (la más reciente)
     def _last(series: pd.Series):
@@ -143,6 +183,8 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     last_bb_lower = _last(bb_lower)
     last_vol_avg = _last(vol_avg)
     last_volume = _last(volume)
+    last_vwap = _last(vwap)
+    last_daily_open = _last(daily_open)
 
     return {
         "rsi": last_rsi,
@@ -155,6 +197,8 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
         "bb_lower": last_bb_lower,
         "volume": last_volume,
         "volume_avg": last_vol_avg,
+        "vwap": last_vwap,
+        "daily_open": last_daily_open,
     }
 
 

@@ -58,6 +58,13 @@ class GlobalConfig(Base):
     
     # Logs
     log_level = Column(String, default="INFO")
+    
+    # Perfil de Riesgo (suave, conservador, agresivo, muy_agresivo)
+    risk_profile = Column(String, default="conservador")
+
+    # Day Trading Intraday Filters
+    use_vwap_filter = Column(Boolean, default=False)
+    use_daily_open_filter = Column(Boolean, default=False)
 
 class Trade(Base):
     __tablename__ = "trades"

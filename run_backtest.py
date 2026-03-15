@@ -8,9 +8,9 @@ Key additions:
 """
 import pandas as pd, numpy as np, sys
 sys.path.insert(0, r"D:\10-Cripto\Bot Tradding con IA - API 2")
-from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi, compute_macd, compute_volume_avg
+from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi, compute_macd, compute_volume_avg, compute_vwap, compute_daily_open
 
-CSV = r"D:\01-Descargas\ETHUSDT-Kline-MINUTE-Spot-2026-01\ETHUSDT-Kline-MINUTE-Spot-2026-01.csv"
+CSV = r"D:\01-Descargas\Historicos\BTCUSDT-Kline-MINUTE-Spot-2025-12.csv"
 INITIAL = 66.0; FEE = 0.1
 
 # Load and resample
@@ -33,6 +33,8 @@ bbu, bbm, bbl = compute_bollinger_bands(df["close"], 20, 2.0)
 rsi = compute_rsi(df["close"], 14)
 ml, ms_s, _ = compute_macd(df["close"])
 vol_avg = compute_volume_avg(df["volume"], 20)
+vwap = compute_vwap(df)
+daily_open = compute_daily_open(df)
 
 # Macro indicators on 1h
 ema50_1h = compute_ema(df_1h["close"], 50)
@@ -63,6 +65,8 @@ def run(config):
     use_rsi_guard = config.get("use_rsi_guard", False)
     use_vol_filter = config.get("use_vol_filter", False)
     use_macro = config.get("use_macro", False)
+    use_vwap = config.get("use_vwap", False)
+    use_daily_open = config.get("use_daily_open", False)
     rsi_max_buy = config.get("rsi_max_buy", 65)
     
     for i in range(200, len(df)):  # Start at 200 for EMA200                
@@ -76,6 +80,8 @@ def run(config):
         lm=float(ml.iloc[i]) if not pd.isna(ml.iloc[i]) else 0
         lms=float(ms_s.iloc[i]) if not pd.isna(ms_s.iloc[i]) else 0
         lv=float(df["volume"].iloc[i]); lva=float(vol_avg.iloc[i])
+        lvwap = float(vwap.iloc[i])
+        ldaily = float(daily_open.iloc[i])
         lg=lef-les; pg=pef-pes; itr=la>25; hp=(hold*p)>1.0; mcd=lm<lms
         
         # Macro check
@@ -97,6 +103,10 @@ def run(config):
                         blocked = True
                     if use_macro and not macro_ok:
                         blocked = True
+                    if use_vwap and p < lvwap:
+                        blocked = True
+                    if use_daily_open and p < ldaily:
+                        blocked = True
                     if not blocked and cap*(inv_t/100)>1.0:
                         sig="buy"; st="EMA"
             else:
@@ -104,6 +114,10 @@ def run(config):
                 if lr<35 and p<=lbl_v*1.002:
                     blocked = False
                     if use_vol_filter and lv < lva * 0.5:  # Relaxed for MR
+                        blocked = True
+                    if use_vwap and p < lvwap:
+                        blocked = True
+                    if use_daily_open and p < ldaily:
                         blocked = True
                     if not blocked and cap*(inv_r/100)>1.0:
                         sig="buy"; st="MR"
@@ -150,20 +164,20 @@ def run(config):
 configs = {
     "ORIGINAL (sin mejoras)": dict(tp=2.5, prev=1.0),
     "+ EMA200 filter": dict(tp=2.5, prev=1.0, use_ema200=True),
-    "+ RSI guard (<65)": dict(tp=2.5, prev=1.0, use_rsi_guard=True),
-    "+ Volume filter": dict(tp=2.5, prev=1.0, use_vol_filter=True),
-    "+ Macro 1h filter": dict(tp=2.5, prev=1.0, use_macro=True),
-    "ALL FILTERS": dict(tp=2.5, prev=1.0, use_ema200=True, use_rsi_guard=True, use_vol_filter=True, use_macro=True),
     "EMA200 + Macro": dict(tp=2.5, prev=1.0, use_ema200=True, use_macro=True),
-    "EMA200 + Macro + RSI": dict(tp=2.5, prev=1.0, use_ema200=True, use_macro=True, use_rsi_guard=True),
-    "EMA200 + Macro + Vol": dict(tp=2.5, prev=1.0, use_ema200=True, use_macro=True, use_vol_filter=True),
+    "EMA200 + Macro + Vol + RSI": dict(tp=2.5, prev=1.0, use_ema200=True, use_macro=True, use_vol_filter=True, use_rsi_guard=True),
+    "=== INTRADAY FILTERS ===": dict(tp=2.5, prev=1.0),
+    "Macro + Daily Open": dict(tp=2.5, prev=1.0, use_macro=True, use_daily_open=True, use_ema200=True),
+    "Macro + VWAP": dict(tp=2.5, prev=1.0, use_macro=True, use_vwap=True, use_ema200=True),
+    "Macro + VWAP + Daily Open": dict(tp=2.5, prev=1.0, use_macro=True, use_vwap=True, use_daily_open=True, use_ema200=True),
+    "ALL FILTERS (MAX SAFEST)": dict(tp=2.5, prev=1.0, use_ema200=True, use_macro=True, use_vwap=True, use_daily_open=True, use_vol_filter=True, use_rsi_guard=True),
 }
 
 L = []
-L.append("ETH/USDT STRATEGY IMPROVEMENTS BACKTEST - January 2026")
+L.append("BTC/USDT DAY-TRADING FILTERS BACKTEST - January 2026")
 L.append("Period: %s to %s" % (df["datetime"].iloc[0], df["datetime"].iloc[-1]))
 L.append("Candles: %d (15m) | Price: $%.0f - $%.0f" % (len(df), df["close"].min(), df["close"].max()))
-L.append("ETH en Enero 2026: Veremos el comportamiento del precio")
+L.append("BTC bajando en enero: Probando VWAP y Daily Open")
 L.append("="*100)
 L.append("")
 L.append("%-25s %8s %7s %6s %8s %7s %8s %8s %10s %10s" % 
@@ -191,6 +205,6 @@ for t in best_r["trades"][-15:]:
     L.append("  %s | %s @$%.0f [%s]%s PV=$%.2f" % (t["date"], s, t["price"], t.get("strat","?"), pstr, t["pv"]))
 
 out = "\n".join(L)
-with open(r"D:\10-Cripto\Bot Tradding con IA - API 2\eth_improvements_backtest.txt", "w", encoding="utf-8") as f:
+with open(r"D:\10-Cripto\Bot Tradding con IA - API 2\intraday_filters_backtest.txt", "w", encoding="utf-8") as f:
     f.write(out)
-print("DONE - results in eth_improvements_backtest.txt")
+print("DONE - results in intraday_filters_backtest.txt")
