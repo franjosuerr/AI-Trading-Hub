@@ -70,6 +70,7 @@ class GlobalConfigBase(BaseModel):
     adx_period: int
     adx_threshold: int
     invest_percentage: float
+    invest_percentage_ranging: float
     
     trailing_stop_activation: float
     trailing_stop_distance: float

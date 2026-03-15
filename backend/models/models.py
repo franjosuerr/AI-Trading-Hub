@@ -33,14 +33,14 @@ class GlobalConfig(Base):
     timeframe = Column(String, default="15m")
     interval = Column(Integer, default=300)
     test_mode = Column(Boolean, default=False)
-    pairs = Column(String, default="SOL/USDT,ETH/USDT")
+    pairs = Column(String, default="SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT")
     
     # Parámetros de trading
     candle_count = Column(Integer, default=210)
-    stop_loss_percent = Column(Float, default=2.0)
+    stop_loss_percent = Column(Float, default=3.0)
     max_trades_per_day = Column(Integer, default=5)
     pair_delay = Column(Integer, default=2)
-    max_exposure_percent = Column(Float, default=10.0)
+    max_exposure_percent = Column(Float, default=80.0)
     cooldown_minutes = Column(Integer, default=120)
     
     # Parámetros Estrategia EMA
@@ -48,7 +48,8 @@ class GlobalConfig(Base):
     ema_slow = Column(Integer, default=30)
     adx_period = Column(Integer, default=14)
     adx_threshold = Column(Integer, default=25)
-    invest_percentage = Column(Float, default=75.0)
+    invest_percentage = Column(Float, default=25.0)
+    invest_percentage_ranging = Column(Float, default=15.0)  # % para estrategia de rango (mean reversion)
     
     # Parámetros Pro
     trailing_stop_activation = Column(Float, default=1.5)  # % de profil a partir del cual se prende el trailing stop
