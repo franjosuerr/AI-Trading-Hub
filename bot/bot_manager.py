@@ -476,10 +476,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         )
 
         # 2. Indicadores técnicos
-        indicators_dict = compute_all_indicators(df)
-        
-        # Calcular los específicos para esta estrategia
-        from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi, compute_volume_avg
+        from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi, compute_volume_avg, compute_macd, compute_vwap, compute_daily_open
         ema_fast = compute_ema(df["close"], ema_fast_len)
         ema_slow = compute_ema(df["close"], ema_slow_len)
         ema_50 = compute_ema(df["close"], 50)
@@ -488,27 +485,28 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         bb_upper, bb_mid, bb_lower = compute_bollinger_bands(df["close"], 20, 2.0)
         rsi_series = compute_rsi(df["close"], 14)
         vol_avg_series = compute_volume_avg(df["volume"], 20)
-        
+        macd_line, macd_signal, _ = compute_macd(df["close"])
+        vwap_series = compute_vwap(df)
+        daily_open_series = compute_daily_open(df)
+
         last_rsi = float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0
         last_bb_upper = float(bb_upper.iloc[-1])
         last_bb_mid = float(bb_mid.iloc[-1])
-        # 3. Precio actual
-        current_price = await asyncio.to_thread(_fetch_ticker_price, exchange, pair, user_logger)
-        if current_price is not None:
-            user_logger.info("Precio actual (ticker) %s: %s", pair, current_price)
+        last_bb_lower = float(bb_lower.iloc[-1])
+        last_ema_200 = float(ema_200.iloc[-1])
+        last_volume = float(df["volume"].iloc[-1]) if "volume" in df.columns else 0
+        last_vol_avg = float(vol_avg_series.iloc[-1]) if not pd.isna(vol_avg_series.iloc[-1]) else 0
+        last_vwap = float(vwap_series.iloc[-1]) if not pd.isna(vwap_series.iloc[-1]) else 0.0
+        last_daily_open = float(daily_open_series.iloc[-1]) if not pd.isna(daily_open_series.iloc[-1]) else 0.0
 
-        # Extract indicators from dict (or compute if not present, for backward compatibility)
-        last_rsi = indicators_dict.get("rsi") or (float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0)
-        last_bb_upper = indicators_dict.get("bb_upper") or float(bb_upper.iloc[-1])
-        last_bb_mid = indicators_dict.get("bb_mid") or float(bb_mid.iloc[-1])
-        last_bb_lower = indicators_dict.get("bb_lower") or float(bb_lower.iloc[-1])
-        last_ema_200 = indicators_dict.get("ema200") or float(ema_200.iloc[-1])
-        last_volume = indicators_dict.get("volume") or (float(df["volume"].iloc[-1]) if "volume" in df.columns else 0)
-        last_vol_avg = indicators_dict.get("volume_avg") or (float(vol_avg_series.iloc[-1]) if not pd.isna(vol_avg_series.iloc[-1]) else 0)
+        current_price = await asyncio.to_thread(_fetch_ticker_price, exchange, pair, user_logger)
         
-        last_vwap = indicators_dict.get("vwap") or 0.0
-        last_daily_open = indicators_dict.get("daily_open") or 0.0
-        
+        # Consolida los indicadores calculados unificando variables transversales
+        indicators_dict = {
+            "macd_line": float(macd_line.iloc[-1]) if not pd.isna(macd_line.iloc[-1]) else 0.0,
+            "macd_signal": float(macd_signal.iloc[-1]) if not pd.isna(macd_signal.iloc[-1]) else 0.0,
+        }
+
         price_above_ema200 = (current_price > last_ema_200) if current_price else True
         volume_ok = (last_volume > last_vol_avg)
                 
@@ -736,9 +734,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 sl_label = f"BE:0.1%" if dynamic_stop_loss == -0.1 else f"SL:-{stop_loss}%"
                 reason = f"Hold: P&L={pnl_pct:.2f}% (Max={max_pnl_pct:.2f}%, {sl_label}, RSI={last_rsi:.1f})"
 
+        confidence_val = 0.0
+        if signal == "buy":
+            # Calcular 'confidence' basado en fuerza de señal
+            if is_trending and last_adx > 35:
+                confidence_val = 0.95
+            elif regime == "BEAR" and last_rsi <= 20: # Oversold Brutal
+                confidence_val = 0.99
+            elif regime == "RANGO" and last_rsi < 35:
+                confidence_val = 0.85
+            else:
+                confidence_val = 0.8
+        elif signal == "sell":
+            # Salidas por sistema algorítmico implican 100% de confianza matemática
+            confidence_val = 1.0
+
         signal_data = {
             "signal": signal,
-            "confidence": 1.0 if signal != "hold" else 0.0,
+            "confidence": confidence_val,
             "reason": reason,
             "amount_usdt": amount_to_invest,
             "sell_percentage": 100.0
@@ -1109,6 +1122,34 @@ class BotManager:
         # Balance al arranque
         balance_at_start = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
         _log_balance_full(user_logger, balance_at_start, "Balance al arranque")
+        
+        # Sincronización de Estado (Reinicio)
+        def _sync_open_orders_and_holdings(user_id, balance_start, test_mode, user_log):
+            if test_mode or not balance_start: return
+            try:
+                db = SessionLocal()
+                # Obtener pares con compras en la historia
+                pairs_db = db.query(Trade.pair).filter(Trade.user_id == user_id).distinct().all()
+                for (t_pair,) in pairs_db:
+                    base_currency = t_pair.split("/")[0] if "/" in t_pair else t_pair
+                    holdings = 0.0
+                    if base_currency in balance_start and isinstance(balance_start[base_currency], dict):
+                        holdings = float(balance_start[base_currency].get("free", 0) or 0)
+                        
+                    trades = db.query(Trade).filter(Trade.user_id == user_id, Trade.pair == t_pair).order_by(Trade.timestamp.asc()).all()
+                    net_position = sum(t.amount if t.side == 'buy' else -t.amount for t in trades)
+                    
+                    if net_position > 0.0001 and holdings < 0.0001:
+                        user_log.warning("[SYNC] Desincronización en %s: BD asume %.4f pero Exchange tiene %.4f. Nivelando internamente a 0...", t_pair, net_position, holdings)
+                        adj_trade = Trade(user_id=user_id, pair=t_pair, side="sell", amount=net_position, price=0.0, order_id="sync_adjustment", simulated=True, profit=0.0)
+                        db.add(adj_trade)
+                db.commit()
+            except Exception as e:
+                user_log.warning("Error en sincronización inicial de holdings: %s", e)
+            finally:
+                db.close()
+                
+        await asyncio.to_thread(_sync_open_orders_and_holdings, user_id, balance_at_start, test_mode, user_logger)
 
         # Inicializar balance virtual para modo test
         if test_mode:

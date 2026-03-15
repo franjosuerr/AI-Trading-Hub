@@ -3,6 +3,7 @@
 
 import ccxt
 import pandas as pd
+import time
 from typing import Optional
 
 from config import (
@@ -16,6 +17,63 @@ from logger_config import get_logger
 from utils import round_to_precision
 
 logger = get_logger("exchange")
+
+
+def with_exponential_backoff(retries=3, base_delay=2.0):
+    """
+    Decorador para reintentar peticiones a la API en caso de fallos de red o RateLimitExceeded.
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            delay = base_delay
+            for attempt in range(retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (ccxt.NetworkError, ccxt.RateLimitExceeded) as e:
+                    if attempt == retries:
+                        logger.error("Fallo definitivo en %s tras %d reintentos: %s", func.__name__, retries, str(e)[:100])
+                        return None
+                    logger.warning("Error de red/RateLimit en %s. Reintento %d/%d en %.1fs...", func.__name__, attempt+1, retries, delay)
+                    time.sleep(delay)
+                    delay *= 2
+                except ccxt.InsufficientFunds as e:
+                    logger.warning("Fallo por InsufficientFunds en %s: %s", func.__name__, str(e)[:100])
+                    return None
+                except ccxt.ExchangeError as e:
+                    logger.warning("ExchangeError en %s: %s", func.__name__, str(e)[:100])
+                    return None
+                except Exception as e:
+                    logger.exception("Error fatal no reintentable en %s: %s", func.__name__, e)
+                    return None
+            return None
+        return wrapper
+    return decorator
+
+
+def check_minimum_notional(exchange: ccxt.Exchange, symbol: str, amount: float, price: float) -> bool:
+    """Verifica límites amount y cost (notional) según el mercado actual."""
+    try:
+        market = exchange.market(symbol)
+        limits = market.get("limits", {})
+        
+        # Check minimum amount
+        min_amount = limits.get("amount", {}).get("min")
+        if min_amount and amount < min_amount:
+            logger.warning("Orden rechazada localmente: monto %f menor al mínimo %f para %s", amount, min_amount, symbol)
+            return False
+            
+        # Check minimum cost
+        cost = amount * price
+        min_cost = limits.get("cost", {}).get("min")
+        if min_cost and cost < min_cost:
+            logger.warning("Orden rechazada localmente: coste total %f menor al mínimo notional %f para %s", cost, min_cost, symbol)
+            return False
+            
+        return True
+    except Exception as e:
+        logger.warning("No se pudieron verificar mínimos para %s: %s", symbol, e)
+        return True
+
 
 
 def create_exchange():
@@ -34,6 +92,7 @@ def create_exchange():
     return exchange
 
 
+@with_exponential_backoff(retries=3, base_delay=2.0)
 def fetch_ohlcv(
     exchange: ccxt.Exchange,
     symbol: str,
@@ -44,33 +103,18 @@ def fetch_ohlcv(
     Obtiene velas OHLCV para el par y timeframe. Retorna DataFrame con columnas
     timestamp, open, high, low, close, volume.
     """
-    try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        if not ohlcv:
-            logger.warning("Sin datos OHLCV para %s.", symbol)
-            return None
-        df = pd.DataFrame(
-            ohlcv,
-            columns=["timestamp", "open", "high", "low", "close", "volume"],
-        )
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
-        logger.debug("OHLCV obtenido para %s: %d velas.", symbol, len(df))
-        return df
-    except ccxt.NetworkError as e:
-        logger.warning(
-            "Error de red o DNS al conectar con CoinEx (sin datos para %s). "
-            "Comprueba tu conexión a internet y que api.coinex.com sea accesible.",
-            symbol,
-        )
-        logger.debug("CoinEx NetworkError para %s: %s", symbol, e)
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    if not ohlcv:
+        logger.warning("Sin datos OHLCV para %s.", symbol)
         return None
-    except ccxt.ExchangeError as e:
-        logger.warning("Error de la exchange CoinEx para %s: %s", symbol, str(e)[:200])
-        return None
-    except Exception as e:
-        logger.exception("Error al obtener OHLCV para %s: %s", symbol, e)
-        return None
+    df = pd.DataFrame(
+        ohlcv,
+        columns=["timestamp", "open", "high", "low", "close", "volume"],
+    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    df.set_index("timestamp", inplace=True)
+    logger.debug("OHLCV obtenido para %s: %d velas.", symbol, len(df))
+    return df
 
 
 def get_market_precision(exchange: ccxt.Exchange, symbol: str) -> dict:
@@ -115,6 +159,7 @@ def _precision_from_value(value) -> int:
     return 8
 
 
+@with_exponential_backoff(retries=3, base_delay=2.0)
 def create_order(
     exchange: ccxt.Exchange,
     symbol: str,
@@ -156,89 +201,75 @@ def create_order(
         )
         return fake_order
 
-    try:
-        if order_type == "market":
-            # CoinEx exige el precio en compras a mercado para calcular el coste (amount * price)
-            if side == "buy" and price is None:
-                ticker = exchange.fetch_ticker(symbol)
-                price = float(ticker.get("last", 0))
-            if price is not None:
-                price = round_to_precision(price, precision["price"])
-            order = exchange.create_market_order(symbol, side, amount, price)
-        else:
-            if price is None:
-                ticker = exchange.fetch_ticker(symbol)
-                price = ticker["last"]
+    if order_type == "market":
+        # CoinEx exige el precio en compras a mercado para calcular el coste (amount * price)
+        if side == "buy" and price is None:
+            ticker = exchange.fetch_ticker(symbol)
+            price = float(ticker.get("last", 0))
+        if price is not None:
             price = round_to_precision(price, precision["price"])
-            order = exchange.create_limit_order(symbol, side, amount, price)
-        logger.info(
-            "Orden ejecutada: %s %s %s id=%s cantidad=%s",
-            side,
-            symbol,
-            order_type,
-            order.get("id"),
-            order.get("filled", amount),
-        )
-        return order
-    except ccxt.InsufficientFunds as e:
-        logger.warning(
-            "Saldo insuficiente para la orden %s %s: la cuenta no tiene suficiente saldo. %s",
-            side,
-            symbol,
-            str(e)[:100],
-        )
-        return None
-    except Exception as e:
-        logger.exception("Error al crear la orden %s %s %s: %s", side, symbol, order_type, e)
-        return None
+        
+        # Validar mínimos (amount vs cost)
+        if not check_minimum_notional(exchange, symbol, amount, price):
+            return None
+            
+        order = exchange.create_market_order(symbol, side, amount, price)
+    else:
+        if price is None:
+            ticker = exchange.fetch_ticker(symbol)
+            price = ticker["last"]
+        price = round_to_precision(price, precision["price"])
+        
+        if not check_minimum_notional(exchange, symbol, amount, price):
+            return None
+            
+        order = exchange.create_limit_order(symbol, side, amount, price)
+        
+    logger.info(
+        "Orden ejecutada: %s %s %s id=%s cantidad=%s",
+        side,
+        symbol,
+        order_type,
+        order.get("id"),
+        order.get("filled", amount),
+    )
+    return order
 
 
+@with_exponential_backoff(retries=3, base_delay=2.0)
 def fetch_ticker_price(exchange: ccxt.Exchange, symbol: str) -> Optional[float]:
     """Obtiene el precio actual (last) del par."""
-    try:
-        ticker = exchange.fetch_ticker(symbol)
-        return float(ticker.get("last", 0))
-    except Exception as e:
-        logger.exception("Error al obtener el ticker %s: %s", symbol, e)
-        return None
+    ticker = exchange.fetch_ticker(symbol)
+    return float(ticker.get("last", 0))
 
 
+@with_exponential_backoff(retries=3, base_delay=2.0)
 def fetch_balance(exchange: ccxt.Exchange, pairs: Optional[list] = None) -> Optional[dict]:
     """
     Obtiene el balance de la cuenta. Retorna dict por moneda: { "BTC": {"free": x, "used": y, "total": z}, ... }.
     Si pairs está definido, incluye solo las bases y cotizaciones de esos pares más cualquier con total > 0.
     """
-    try:
-        balance = exchange.fetch_balance()
-        result = {}
-        skip_keys = {"info", "timestamp", "datetime"}
-        currencies = set()
-        if pairs:
-            for p in pairs:
-                if "/" in p:
-                    base, quote = p.split("/", 1)
-                    currencies.add(base.strip())
-                    currencies.add(quote.strip())
-        for key, value in balance.items():
-            if key in skip_keys or value is None:
-                continue
-            if isinstance(value, dict) and ("free" in value or "total" in value):
-                free = float(value.get("free", 0) or 0)
-                used = float(value.get("used", 0) or 0)
-                total = float(value.get("total", 0) or 0)
-                if total > 0 or free > 0 or used > 0 or (currencies and key in currencies):
-                    result[key] = {"free": free, "used": used, "total": total}
-        logger.info("Balance obtenido: %d moneda(s) con saldo.", len(result))
-        return result if result else None
-    except ccxt.NetworkError as e:
-        logger.warning("Error de red al obtener el balance: %s", str(e)[:150])
-        return None
-    except ccxt.ExchangeError as e:
-        logger.warning("Error de la exchange al obtener el balance: %s", str(e)[:150])
-        return None
-    except Exception as e:
-        logger.exception("Error al obtener el balance: %s", e)
-        return None
+    balance = exchange.fetch_balance()
+    result = {}
+    skip_keys = {"info", "timestamp", "datetime"}
+    currencies = set()
+    if pairs:
+        for p in pairs:
+            if "/" in p:
+                base, quote = p.split("/", 1)
+                currencies.add(base.strip())
+                currencies.add(quote.strip())
+    for key, value in balance.items():
+        if key in skip_keys or value is None:
+            continue
+        if isinstance(value, dict) and ("free" in value or "total" in value):
+            free = float(value.get("free", 0) or 0)
+            used = float(value.get("used", 0) or 0)
+            total = float(value.get("total", 0) or 0)
+            if total > 0 or free > 0 or used > 0 or (currencies and key in currencies):
+                result[key] = {"free": free, "used": used, "total": total}
+    logger.info("Balance obtenido: %d moneda(s) con saldo.", len(result))
+    return result if result else None
 
 
 def format_balance_one_line(balance: Optional[dict]) -> str:
