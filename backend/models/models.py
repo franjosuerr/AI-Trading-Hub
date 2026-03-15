@@ -50,6 +50,11 @@ class GlobalConfig(Base):
     adx_threshold = Column(Integer, default=25)
     invest_percentage = Column(Float, default=75.0)
     
+    # Parámetros Pro
+    trailing_stop_activation = Column(Float, default=1.5)  # % de profil a partir del cual se prende el trailing stop
+    trailing_stop_distance = Column(Float, default=0.5)    # % de distancia del máximo para vender
+    macro_timeframe = Column(String, default="1h")         # Temporalidad para filtrado macro
+    
     # Logs
     log_level = Column(String, default="INFO")
 
@@ -66,5 +71,6 @@ class Trade(Base):
     order_id = Column(String)
     simulated = Column(Boolean)
     profit = Column(Float, default=0.0) # Para registrar ganancias al cerrar (sell)
+    max_price_reached = Column(Float, default=0.0) # Para Trailing Stop Loss
 
     owner = relationship("User", back_populates="trades")

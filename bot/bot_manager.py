@@ -429,6 +429,11 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     adx_period = config.adx_period or 14
     adx_thresh = config.adx_threshold or 25
     invest_pct = config.invest_percentage or 75.0
+    
+    # Pro params
+    trailing_activation = getattr(config, "trailing_stop_activation", 1.5)
+    trailing_distance = getattr(config, "trailing_stop_distance", 0.5)
+    macro_tf = getattr(config, "macro_timeframe", "1h")
 
     cycle_start = datetime.utcnow().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
@@ -485,6 +490,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         if current_price is not None:
             user_logger.info("Precio actual (ticker) %s: %s", pair, current_price)
 
+        # 3.5. Multi-Timeframe (Macro) Check
+        macro_uptrend = True
+        try:
+            df_macro = await asyncio.to_thread(_fetch_ohlcv, exchange, pair, macro_tf, 210, user_logger)
+            if df_macro is not None and not df_macro.empty:
+                from indicators import compute_ema
+                ema50_macro = compute_ema(df_macro["close"], 50)
+                ema200_macro = compute_ema(df_macro["close"], 200)
+                last_ema50_m = float(ema50_macro.iloc[-1])
+                last_ema200_m = float(ema200_macro.iloc[-1])
+                last_close_m = float(df_macro["close"].iloc[-1])
+                macro_uptrend = (last_close_m > last_ema200_m) and (last_ema50_m > last_ema200_m)
+                user_logger.info("Filtro Macro %s: Alcista=%s (C=%.4f, EMA50=%.4f, EMA200=%.4f)", macro_tf, macro_uptrend, last_close_m, last_ema50_m, last_ema200_m)
+            else:
+                user_logger.warning("Filtro Macro %s: Sin datos, asumiendo alcista para no bloquear.", macro_tf)
+        except Exception as e:
+            user_logger.warning("Error evaluando MTF %s: %s", macro_tf, e)
+
         # Contexto de portafolio para la IA (holdings, costo, P&L)
         base_currency = pair.split("/")[0] if "/" in pair else pair
         quote_currency = pair.split("/")[1] if "/" in pair else "USDT"
@@ -510,28 +533,71 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         amount_to_invest = 0.0
         
         if not has_open_position:
-            # Lógica Condición de COMPRA: cruce hacia arriba
-            if last_ema_fast > last_ema_slow and prev_ema_fast <= prev_ema_slow:
-                if last_adx > adx_thresh:
-                    signal = "buy"
-                    reason = f"Cruce EMA{ema_fast_len} > EMA{ema_slow_len} con ADX={last_adx:.1f} > {adx_thresh}"
-                    free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
-                    amount_to_invest = free_quote_now * (invest_pct / 100.0)
-                else:
-                    reason = f"Cruce EMA{ema_fast_len} > EMA{ema_slow_len} ignorado por tendencia débil (ADX={last_adx:.1f} <= {adx_thresh})"
+            # Lógica Condición de COMPRA: tendencia alcista con pullback
+            is_uptrend = (last_ema_fast > last_ema_slow) and (last_adx > adx_thresh)
+            is_pullback = current_price is not None and current_price <= (last_ema_fast * 1.005) # a lo sumo 0.5% por encima de EMA rápida (o debajo)
+            
+            if is_uptrend and is_pullback and macro_uptrend:
+                signal = "buy"
+                reason = f"Pullback en tendencia alcista (Macro: OK, ADX={last_adx:.1f}, P={current_price} <= EMA_fast={last_ema_fast * 1.005:.4f})"
+                free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                amount_to_invest = free_quote_now * (invest_pct / 100.0)
+            elif is_uptrend and not macro_uptrend:
+                reason = f"Tendencia en {timeframe} es alcista, pero Macro {macro_tf} es bajista. Compra ignorada."
+            elif is_uptrend:
+                reason = f"Tendencia alcista (ADX={last_adx:.1f}) pero precio {current_price} aún lejos de EMA_fast {last_ema_fast:.4f} (sin pullback)"
+            else:
+                reason = f"Sin tendencia alcista clara (EMA_fast > EMA_slow y ADX > {adx_thresh})"
         else:
             # Lógica Condición de VENTA
-            avg_price = portfolio_ctx.get("avg_price", 0.0)
-            pnl_percent = portfolio_ctx.get("pnl_percent", 0.0)
+            avg_entry_price = portfolio_ctx.get("avg_entry_price", 0.0)
+            pnl_pct = portfolio_ctx.get("pnl_pct", 0.0)
             
-            if last_gap < prev_gap and current_price > avg_price:
+            # Recuperar max_price de DB o estimarlo
+            max_pnl_pct = 0.0
+            try:
+                db = SessionLocal()
+                try:
+                    open_trades = db.query(Trade).filter(Trade.user_id == user.id, Trade.pair == pair, Trade.side == 'buy').order_by(Trade.timestamp.desc()).all()
+                    if open_trades:
+                        last_max = open_trades[0].max_price_reached or 0.0
+                        if current_price and current_price > last_max:
+                            open_trades[0].max_price_reached = current_price
+                            db.commit()
+                            last_max = current_price
+                        if avg_entry_price > 0:
+                            max_pnl_pct = ((last_max - avg_entry_price) / avg_entry_price) * 100
+                finally:
+                    db.close()
+            except Exception as e:
+                user_logger.warning("Error con Trailing Stop DB: %s", e)
+                
+            # Verificar MACD
+            last_macd = indicators_dict.get("macd_line")
+            last_macd_signal = indicators_dict.get("macd_signal")
+            macd_cross_down = False
+            if last_macd is not None and last_macd_signal is not None:
+                macd_cross_down = last_macd < last_macd_signal
+            
+            # Evaluar Trailing Stop
+            is_trailing_stop = False
+            if max_pnl_pct >= trailing_activation and pnl_pct <= (max_pnl_pct - trailing_distance):
+                is_trailing_stop = True
+
+            if is_trailing_stop:
                 signal = "sell"
-                reason = f"Gap reduciéndose ({last_gap:.4f} < {prev_gap:.4f}) y Profit del {pnl_percent:.2f}% asegurado"
-            elif pnl_percent <= -stop_loss:
+                reason = f"Trailing Stop Activado: Cae a {pnl_pct:.2f}% desde un máximo de {max_pnl_pct:.2f}%"
+            elif pnl_pct > 1.5 and (last_gap < prev_gap or macd_cross_down):
                 signal = "sell"
-                reason = f"Stop Loss alcanzado: {pnl_percent:.2f}% <= -{stop_loss}%"
+                reason = f"Toma de ganancias dinámica: Profit {pnl_pct:.2f}% (MACD cruzando: {macd_cross_down}, Gap {last_gap:.4f} < {prev_gap:.4f})"
+            elif pnl_pct <= -stop_loss:
+                signal = "sell"
+                reason = f"Stop Loss alcanzado: {pnl_pct:.2f}% <= -{stop_loss}%"
+            elif macd_cross_down and pnl_pct > 0:
+                signal = "sell"
+                reason = f"Venta preventiva: MACD bajista y en profit del {pnl_pct:.2f}%"
             else:
-                reason = f"Hold Posición: Gap {last_gap:.4f} (prev: {prev_gap:.4f}), P&L: {pnl_percent:.2f}%"
+                reason = f"Hold Posición: P&L actual {pnl_pct:.2f}% (Max P&L: {max_pnl_pct:.2f}%)"
 
         signal_data = {
             "signal": signal,
@@ -713,8 +779,9 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 sell_pct, pair, amount, base_currency, free_base_now, sell_value_usdt,
             )
 
-        user_logger.info("Ejecutando orden: %s %s cantidad=%s (market)", signal_data["signal"], pair, amount)
-        order = await asyncio.to_thread(_create_order, exchange, pair, signal_data["signal"], amount, "market", test_mode, user_logger)
+        # Enviar siempre limit orders para ahorrar fees
+        user_logger.info("Ejecutando orden: %s %s cantidad=%s (limit)", signal_data["signal"], pair, amount)
+        order = await asyncio.to_thread(_create_order, exchange, pair, signal_data["signal"], amount, "limit", test_mode, user_logger, current_price)
 
         if order:
             price_exec = order.get("average") or order.get("price")
@@ -747,6 +814,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                         order_id=str(order_id),
                         simulated=simulated,
                         profit=real_pnl,
+                        max_price_reached=trade_price if signal_data["signal"] == "buy" else 0.0
                     )
                     db.add(new_trade)
                     db.commit()
