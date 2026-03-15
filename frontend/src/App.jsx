@@ -387,9 +387,9 @@ function Dashboard({ userRole, userId, username, onLogout }) {
   const [formData, setFormData] = useState({ username: '', email: '', coinex_api_key: '', coinex_secret: '', telegram_bot_token: '', telegram_chat_id: '', password: '' });
   const [globalConfig, setGlobalConfig] = useState({
     interval: 300, test_mode: false,
-    pairs: 'SOL/USDT,ETH/USDT', timeframe: '15m', candle_count: 210,
-    pair_delay: 2, max_trades_per_day: 5, stop_loss_percent: 2.0, max_exposure_percent: 100.0, cooldown_minutes: 60, log_level: 'INFO',
-    ema_fast: 7, ema_slow: 30, adx_period: 14, adx_threshold: 25, invest_percentage: 75.0
+    pairs: 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT', timeframe: '15m', candle_count: 350,
+    pair_delay: 2, max_trades_per_day: 10, stop_loss_percent: 3.0, max_exposure_percent: 80.0, cooldown_minutes: 120, log_level: 'INFO',
+    ema_fast: 7, ema_slow: 30, adx_period: 14, adx_threshold: 25, invest_percentage: 25.0, invest_percentage_ranging: 15.0
   });
   const [isGlobalModalOpen, setIsGlobalModalOpen] = useState(false);
   const [statsUserId, setStatsUserId] = useState(null);
@@ -643,8 +643,8 @@ function Dashboard({ userRole, userId, username, onLogout }) {
             </div>
             <form onSubmit={handleSaveGlobal} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '70vh', overflowY: 'auto', paddingRight: '10px' }}>
               <div style={{ padding: '12px', background: 'rgba(0,242,255,0.05)', borderRadius: '8px', border: '1px solid rgba(0,242,255,0.15)' }}>
-                <h3 style={{ fontSize: '0.8rem', color: '#00f2ff', marginBottom: '12px', fontWeight: '700' }}>ESTRATEGIA (EMA + ADX)</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '12px' }}>
+                <h3 style={{ fontSize: '0.8rem', color: '#00f2ff', marginBottom: '12px', fontWeight: '700' }}>ESTRATEGIA DUAL (Tendencia + Rango)</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '12px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>EMA FAST (Corto)</label>
                     <input type="number" value={globalConfig.ema_fast} onChange={(e) => setGlobalConfig({ ...globalConfig, ema_fast: parseInt(e.target.value) })} />
@@ -653,9 +653,15 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                     <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>EMA SLOW (Largo)</label>
                     <input type="number" value={globalConfig.ema_slow} onChange={(e) => setGlobalConfig({ ...globalConfig, ema_slow: parseInt(e.target.value) })} />
                   </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '12px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>% INVERSIÓN (0-100)</label>
+                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>% INVERSIÓN TENDENCIA</label>
                     <input type="number" step="0.1" value={globalConfig.invest_percentage} onChange={(e) => setGlobalConfig({ ...globalConfig, invest_percentage: parseFloat(e.target.value) })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>% INVERSIÓN RANGO</label>
+                    <input type="number" step="0.1" value={globalConfig.invest_percentage_ranging || 15} onChange={(e) => setGlobalConfig({ ...globalConfig, invest_percentage_ranging: parseFloat(e.target.value) })} />
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>

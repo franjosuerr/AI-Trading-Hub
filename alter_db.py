@@ -5,7 +5,7 @@ def alter_db():
     cursor = conn.cursor()
 
     try:
-        cursor.execute('ALTER TABLE global_config ADD COLUMN max_exposure_percent FLOAT DEFAULT 10.0')
+        cursor.execute('ALTER TABLE global_config ADD COLUMN max_exposure_percent FLOAT DEFAULT 80.0')
         print("Added max_exposure_percent")
     except sqlite3.OperationalError as e:
         print("max_exposure_percent might exist:", e)

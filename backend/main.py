@@ -27,16 +27,55 @@ def auto_migrate_db():
         cursor = conn.cursor()
         
         try:
-            cursor.execute('ALTER TABLE global_config ADD COLUMN max_exposure_percent FLOAT DEFAULT 10.0')
+            cursor.execute('ALTER TABLE global_config ADD COLUMN max_exposure_percent FLOAT DEFAULT 80.0')
             logger.info("Columna 'max_exposure_percent' agregada.")
         except sqlite3.OperationalError:
             pass # Ya existe
+        
+        # Corregir valor legacy: 10% bloqueaba compras con invest_percentage=75%
+        try:
+            cursor.execute('UPDATE global_config SET max_exposure_percent = 80.0 WHERE max_exposure_percent = 10.0')
+            if cursor.rowcount > 0:
+                logger.info("max_exposure_percent actualizado de 10.0 a 80.0 (%d registro(s)).", cursor.rowcount)
+        except Exception:
+            pass
             
         try:
             cursor.execute('ALTER TABLE global_config ADD COLUMN cooldown_minutes INTEGER DEFAULT 120')
             logger.info("Columna 'cooldown_minutes' agregada.")
         except sqlite3.OperationalError:
             pass # Ya existe
+        
+        # Migración: columna invest_percentage_ranging para estrategia de rango
+        try:
+            cursor.execute('ALTER TABLE global_config ADD COLUMN invest_percentage_ranging FLOAT DEFAULT 15.0')
+            logger.info("Columna 'invest_percentage_ranging' agregada.")
+        except sqlite3.OperationalError:
+            pass # Ya existe
+        
+        # Migración: actualizar pares para incluir BTC y XRP
+        try:
+            cursor.execute("UPDATE global_config SET pairs = 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT' WHERE pairs = 'SOL/USDT,ETH/USDT'")
+            if cursor.rowcount > 0:
+                logger.info("Pares actualizados: añadidos BTC/USDT y XRP/USDT.")
+        except Exception:
+            pass
+        
+        # Migración: ajustar invest_percentage de 75% a 25% (position sizing conservador)
+        try:
+            cursor.execute('UPDATE global_config SET invest_percentage = 25.0 WHERE invest_percentage = 75.0')
+            if cursor.rowcount > 0:
+                logger.info("invest_percentage ajustado de 75%% a 25%% (position sizing profesional).")
+        except Exception:
+            pass
+        
+        # Migración: ajustar stop_loss de 2% a 3%
+        try:
+            cursor.execute('UPDATE global_config SET stop_loss_percent = 3.0 WHERE stop_loss_percent = 2.0')
+            if cursor.rowcount > 0:
+                logger.info("stop_loss_percent ajustado de 2%% a 3%%.")
+        except Exception:
+            pass
             
         conn.commit()
         conn.close()

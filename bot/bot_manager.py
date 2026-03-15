@@ -420,15 +420,16 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     test_mode = config.test_mode if config.test_mode is not None else True
     timeframe = config.timeframe or "15m"
     candle_count = config.candle_count or 210
-    stop_loss = config.stop_loss_percent or 2.0
+    stop_loss = config.stop_loss_percent or 3.0
     pair_delay = config.pair_delay or 2
-    max_trades = config.max_trades_per_day or 5
+    max_trades = config.max_trades_per_day or 10
     
     ema_fast_len = config.ema_fast or 7
     ema_slow_len = config.ema_slow or 30
     adx_period = config.adx_period or 14
     adx_thresh = config.adx_threshold or 25
-    invest_pct = config.invest_percentage or 75.0
+    invest_pct_trending = config.invest_percentage or 25.0
+    invest_pct_ranging = getattr(config, "invest_percentage_ranging", 15.0) or 15.0
     
     # Pro params
     trailing_activation = getattr(config, "trailing_stop_activation", 1.5)
@@ -474,15 +475,25 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         # 2. Indicadores técnicos
         indicators_dict = compute_all_indicators(df)
         
-        # Calcular los específicos para esta estrategia y añadirlos en df para vectorizarlos
-        from indicators import compute_ema, compute_adx
+        # Calcular los específicos para esta estrategia
+        from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi
         ema_fast = compute_ema(df["close"], ema_fast_len)
         ema_slow = compute_ema(df["close"], ema_slow_len)
         adx = compute_adx(df["high"], df["low"], df["close"], adx_period)
+        bb_upper, bb_mid, bb_lower = compute_bollinger_bands(df["close"], 20, 2.0)
+        rsi_series = compute_rsi(df["close"], 14)
+        
+        last_rsi = float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0
+        last_bb_upper = float(bb_upper.iloc[-1])
+        last_bb_mid = float(bb_mid.iloc[-1])
+        last_bb_lower = float(bb_lower.iloc[-1])
         
         user_logger.info(
-            "Indicadores Base: RSI=%s MACD=%s SMA200=%s",
-            indicators_dict.get("rsi"), indicators_dict.get("macd_line"), indicators_dict.get("sma200")
+            "Indicadores: RSI=%.1f MACD=%.4f ADX=%.1f BB=[%.2f/%.2f/%.2f]",
+            last_rsi,
+            indicators_dict.get("macd_line") or 0,
+            float(adx.iloc[-1]),
+            last_bb_lower, last_bb_mid, last_bb_upper
         )
 
         # 3. Precio actual
@@ -508,14 +519,16 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         except Exception as e:
             user_logger.warning("Error evaluando MTF %s: %s", macro_tf, e)
 
-        # Contexto de portafolio para la IA (holdings, costo, P&L)
+        # Contexto de portafolio (holdings, costo, P&L)
         base_currency = pair.split("/")[0] if "/" in pair else pair
         quote_currency = pair.split("/")[1] if "/" in pair else "USDT"
         portfolio_ctx = await asyncio.to_thread(
             _get_portfolio_for_pair, user.id, pair, balance_effective, current_price, user_logger
         )
 
-        # 4. Lógica de Estrategia EMA Crossover
+        # ════════════════════════════════════════════════════════════
+        # 4. LÓGICA DUAL DE ESTRATEGIA (Régimen de mercado)
+        # ════════════════════════════════════════════════════════════
         last_ema_fast = float(ema_fast.iloc[-1])
         prev_ema_fast = float(ema_fast.iloc[-2])
         last_ema_slow = float(ema_slow.iloc[-1])
@@ -526,34 +539,60 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         prev_gap = prev_ema_fast - prev_ema_slow
         
         holdings = portfolio_ctx.get("holdings", 0.0)
-        has_open_position = (holdings * current_price) > 5.0
+        has_open_position = (holdings * current_price) > 5.0 if current_price else False
+        
+        # Detectar régimen de mercado
+        is_trending = last_adx > adx_thresh
+        regime = "TENDENCIA" if is_trending else "RANGO"
+        user_logger.info("Régimen de mercado: %s (ADX=%.1f, umbral=%d)", regime, last_adx, adx_thresh)
         
         signal = "hold"
         reason = "Esperando señal..."
         amount_to_invest = 0.0
+        strategy_name = ""
         
         if not has_open_position:
-            # Lógica Condición de COMPRA: tendencia alcista con pullback
-            is_uptrend = (last_ema_fast > last_ema_slow) and (last_adx > adx_thresh)
-            is_pullback = current_price is not None and current_price <= (last_ema_fast * 1.005) # a lo sumo 0.5% por encima de EMA rápida (o debajo)
-            
-            if is_uptrend and is_pullback and macro_uptrend:
-                signal = "buy"
-                reason = f"Pullback en tendencia alcista (Macro: OK, ADX={last_adx:.1f}, P={current_price} <= EMA_fast={last_ema_fast * 1.005:.4f})"
-                free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
-                amount_to_invest = free_quote_now * (invest_pct / 100.0)
-            elif is_uptrend and not macro_uptrend:
-                reason = f"Tendencia en {timeframe} es alcista, pero Macro {macro_tf} es bajista. Compra ignorada."
-            elif is_uptrend:
-                reason = f"Tendencia alcista (ADX={last_adx:.1f}) pero precio {current_price} aún lejos de EMA_fast {last_ema_fast:.4f} (sin pullback)"
+            # ─── COMPRA ───
+            if is_trending:
+                # ═══ ESTRATEGIA TENDENCIAL: EMA Crossover + Pullback ═══
+                strategy_name = "EMA Crossover"
+                is_uptrend = last_ema_fast > last_ema_slow
+                is_pullback = current_price is not None and current_price <= (last_ema_fast * 1.005)
+                
+                if is_uptrend and is_pullback and macro_uptrend:
+                    signal = "buy"
+                    reason = f"[{regime}] Pullback alcista (ADX={last_adx:.1f}, P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f}, Macro=OK)"
+                    free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                    amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
+                elif is_uptrend and not macro_uptrend:
+                    reason = f"[{regime}] Tendencia alcista pero Macro {macro_tf} bajista. Compra bloqueada."
+                elif is_uptrend:
+                    reason = f"[{regime}] Tendencia alcista (ADX={last_adx:.1f}) sin pullback (P={current_price} > EMA_fast={last_ema_fast:.2f})"
+                else:
+                    reason = f"[{regime}] EMA bajista (EMA_fast={last_ema_fast:.2f} < EMA_slow={last_ema_slow:.2f})"
             else:
-                reason = f"Sin tendencia alcista clara (EMA_fast > EMA_slow y ADX > {adx_thresh})"
+                # ═══ ESTRATEGIA MEAN REVERSION: Bollinger + RSI ═══
+                strategy_name = "Mean Reversion"
+                is_oversold = last_rsi < 35
+                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.002  # 0.2% margen
+                
+                if is_oversold and is_at_bb_lower:
+                    signal = "buy"
+                    reason = f"[{regime}] Mean Reversion: RSI={last_rsi:.1f}<35 + Precio={current_price} <= BB_lower={last_bb_lower:.2f} (oversold en rango)"
+                    free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                    amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
+                elif is_oversold:
+                    reason = f"[{regime}] RSI oversold ({last_rsi:.1f}) pero precio {current_price} aún sobre BB_lower {last_bb_lower:.2f}"
+                elif is_at_bb_lower:
+                    reason = f"[{regime}] Precio cerca de BB_lower ({last_bb_lower:.2f}) pero RSI={last_rsi:.1f} no oversold (<35)"
+                else:
+                    reason = f"[{regime}] Sin señal de compra (RSI={last_rsi:.1f}, BB_lower={last_bb_lower:.2f}, P={current_price})"
         else:
-            # Lógica Condición de VENTA
+            # ─── VENTA (con posición abierta) ───
             avg_entry_price = portfolio_ctx.get("avg_entry_price", 0.0)
             pnl_pct = portfolio_ctx.get("pnl_pct", 0.0)
             
-            # Recuperar max_price de DB o estimarlo
+            # Recuperar max_price de DB para trailing stop
             max_pnl_pct = 0.0
             try:
                 db = SessionLocal()
@@ -584,20 +623,25 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             if max_pnl_pct >= trailing_activation and pnl_pct <= (max_pnl_pct - trailing_distance):
                 is_trailing_stop = True
 
+            # ═══ Condiciones de venta (priorizadas) ═══
             if is_trailing_stop:
                 signal = "sell"
-                reason = f"Trailing Stop Activado: Cae a {pnl_pct:.2f}% desde un máximo de {max_pnl_pct:.2f}%"
-            elif pnl_pct > 1.5 and (last_gap < prev_gap or macd_cross_down):
-                signal = "sell"
-                reason = f"Toma de ganancias dinámica: Profit {pnl_pct:.2f}% (MACD cruzando: {macd_cross_down}, Gap {last_gap:.4f} < {prev_gap:.4f})"
+                reason = f"Trailing Stop: Cae a {pnl_pct:.2f}% desde máximo {max_pnl_pct:.2f}%"
             elif pnl_pct <= -stop_loss:
                 signal = "sell"
-                reason = f"Stop Loss alcanzado: {pnl_pct:.2f}% <= -{stop_loss}%"
-            elif macd_cross_down and pnl_pct > 0:
+                reason = f"Stop Loss: {pnl_pct:.2f}% <= -{stop_loss}%"
+            elif not is_trending and last_rsi > 65 and current_price >= last_bb_mid and pnl_pct > 0:
+                # Mean Reversion Exit: RSI alto + sobre BB media + en profit
                 signal = "sell"
-                reason = f"Venta preventiva: MACD bajista y en profit del {pnl_pct:.2f}%"
+                reason = f"[RANGO] Mean Reversion Exit: RSI={last_rsi:.1f}>65, P={current_price}>=BB_mid={last_bb_mid:.2f}, P&L={pnl_pct:.2f}%"
+            elif pnl_pct > 1.5 and (last_gap < prev_gap or macd_cross_down):
+                signal = "sell"
+                reason = f"Toma de ganancias: P&L={pnl_pct:.2f}% (MACD bajista={macd_cross_down}, Gap decreciente={last_gap:.4f}<{prev_gap:.4f})"
+            elif macd_cross_down and pnl_pct > 0.5:
+                signal = "sell"
+                reason = f"Venta preventiva: MACD bajista + profit {pnl_pct:.2f}%"
             else:
-                reason = f"Hold Posición: P&L actual {pnl_pct:.2f}% (Max P&L: {max_pnl_pct:.2f}%)"
+                reason = f"Hold: P&L={pnl_pct:.2f}% (Max={max_pnl_pct:.2f}%, RSI={last_rsi:.1f}, Régimen={regime})"
 
         signal_data = {
             "signal": signal,
@@ -632,6 +676,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             "last_close": float(last.get("close")) if last.get("close") is not None else None,
             "volume": float(last.get("volume", 0)),
             "ema_fast": last_ema_fast, "ema_slow": last_ema_slow, "adx": last_adx,
+            "regime": regime, "rsi": last_rsi,
+            "bb_upper": last_bb_upper, "bb_mid": last_bb_mid, "bb_lower": last_bb_lower,
         })
 
         # 5. ¿Ejecutar orden?
@@ -849,7 +895,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 price=float(price_exec) if price_exec else 0.0,
                 order_id=order_id,
                 simulated=simulated,
-                indicators=indicators,
+                indicators=indicators_dict,
                 balance_after=_format_balance_one_line(balance_after),
                 confidence=signal_data.get("confidence", 0.0),
                 reason=signal_data.get("reason", ""),

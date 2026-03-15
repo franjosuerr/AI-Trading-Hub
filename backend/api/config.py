@@ -16,22 +16,24 @@ def get_config(db: Session = Depends(get_db)):
     if not config:
         config = GlobalConfig(
             test_mode=True,
-            pairs="SOL/USDT,ETH/USDT",
+            pairs="SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT",
             timeframe="15m",
             interval=300,
             candle_count=350,
             pair_delay=2,
-            max_trades_per_day=5,
-            max_exposure_percent=10.0,
+            max_trades_per_day=30,
+            max_exposure_percent=80.0,
             cooldown_minutes=120,
             ema_fast=7,
             ema_slow=30,
             adx_period=14,
             adx_threshold=25,
-            invest_percentage=75.0,
+            invest_percentage=25.0,
+            invest_percentage_ranging=15.0,
             trailing_stop_activation=1.5,
             trailing_stop_distance=0.5,
-            macro_timeframe="1h"
+            macro_timeframe="1h",
+            stop_loss_percent=3.0
         )
         db.add(config)
         db.commit()
