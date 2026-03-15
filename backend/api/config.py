@@ -19,7 +19,7 @@ def get_config(db: Session = Depends(get_db)):
             pairs="SOL/USDT,ETH/USDT",
             timeframe="15m",
             interval=300,
-            candle_count=210,
+            candle_count=350,
             pair_delay=2,
             max_trades_per_day=5,
             max_exposure_percent=10.0,
@@ -28,7 +28,10 @@ def get_config(db: Session = Depends(get_db)):
             ema_slow=30,
             adx_period=14,
             adx_threshold=25,
-            invest_percentage=75.0
+            invest_percentage=75.0,
+            trailing_stop_activation=1.5,
+            trailing_stop_distance=0.5,
+            macro_timeframe="1h"
         )
         db.add(config)
         db.commit()

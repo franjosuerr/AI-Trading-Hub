@@ -70,6 +70,10 @@ class GlobalConfigBase(BaseModel):
     adx_period: int
     adx_threshold: int
     invest_percentage: float
+    
+    trailing_stop_activation: float
+    trailing_stop_distance: float
+    macro_timeframe: str
 
 class GlobalConfigResponse(GlobalConfigBase):
     id: int
@@ -87,6 +91,7 @@ class TradeResponse(BaseModel):
     order_id: str
     simulated: bool
     profit: float
+    max_price_reached: float
 
     class Config:
         from_attributes = True
