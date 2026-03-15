@@ -52,7 +52,7 @@ class GlobalConfig(Base):
     invest_percentage_ranging = Column(Float, default=15.0)  # % para estrategia de rango (mean reversion)
     
     # Parámetros Pro
-    trailing_stop_activation = Column(Float, default=1.5)  # % de profil a partir del cual se prende el trailing stop
+    trailing_stop_activation = Column(Float, default=1.5)  # % de profit a partir del cual se prende el trailing stop
     trailing_stop_distance = Column(Float, default=0.5)    # % de distancia del máximo para vender
     macro_timeframe = Column(String, default="1h")         # Temporalidad para filtrado macro
     

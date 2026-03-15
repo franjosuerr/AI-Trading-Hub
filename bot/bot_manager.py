@@ -476,24 +476,33 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         indicators_dict = compute_all_indicators(df)
         
         # Calcular los específicos para esta estrategia
-        from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi
+        from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi, compute_volume_avg
         ema_fast = compute_ema(df["close"], ema_fast_len)
         ema_slow = compute_ema(df["close"], ema_slow_len)
+        ema_200 = compute_ema(df["close"], 200)
         adx = compute_adx(df["high"], df["low"], df["close"], adx_period)
         bb_upper, bb_mid, bb_lower = compute_bollinger_bands(df["close"], 20, 2.0)
         rsi_series = compute_rsi(df["close"], 14)
+        vol_avg_series = compute_volume_avg(df["volume"], 20)
         
         last_rsi = float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0
         last_bb_upper = float(bb_upper.iloc[-1])
         last_bb_mid = float(bb_mid.iloc[-1])
         last_bb_lower = float(bb_lower.iloc[-1])
+        last_ema_200 = float(ema_200.iloc[-1])
+        last_volume = float(df["volume"].iloc[-1]) if "volume" in df.columns else 0
+        last_vol_avg = float(vol_avg_series.iloc[-1]) if not pd.isna(vol_avg_series.iloc[-1]) else 0
+        volume_ok = last_volume >= last_vol_avg  # Volumen por encima del promedio
+        price_above_ema200 = current_price is not None and current_price > last_ema_200
         
         user_logger.info(
-            "Indicadores: RSI=%.1f MACD=%.4f ADX=%.1f BB=[%.2f/%.2f/%.2f]",
+            "Indicadores: RSI=%.1f MACD=%.4f ADX=%.1f BB=[%.2f/%.2f/%.2f] EMA200=%.2f Vol=%s(avg=%.0f)",
             last_rsi,
             indicators_dict.get("macd_line") or 0,
             float(adx.iloc[-1]),
-            last_bb_lower, last_bb_mid, last_bb_upper
+            last_bb_lower, last_bb_mid, last_bb_upper,
+            last_ema_200,
+            "OK" if volume_ok else "BAJO", last_vol_avg
         )
 
         # 3. Precio actual
@@ -559,13 +568,17 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 is_uptrend = last_ema_fast > last_ema_slow
                 is_pullback = current_price is not None and current_price <= (last_ema_fast * 1.005)
                 
-                if is_uptrend and is_pullback and macro_uptrend:
+                if is_uptrend and is_pullback and macro_uptrend and price_above_ema200 and volume_ok:
                     signal = "buy"
-                    reason = f"[{regime}] Pullback alcista (ADX={last_adx:.1f}, P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f}, Macro=OK)"
+                    reason = f"[{regime}] Pullback alcista (ADX={last_adx:.1f}, P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f}, Macro=OK, EMA200=OK, Vol=OK)"
                     free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
                     amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
                 elif is_uptrend and not macro_uptrend:
                     reason = f"[{regime}] Tendencia alcista pero Macro {macro_tf} bajista. Compra bloqueada."
+                elif is_uptrend and not price_above_ema200:
+                    reason = f"[{regime}] Tendencia alcista pero P={current_price} < EMA200={last_ema_200:.2f}. Compra bloqueada (macro bajista)."
+                elif is_uptrend and not volume_ok:
+                    reason = f"[{regime}] Tendencia alcista pero volumen bajo ({last_volume:.0f} < avg {last_vol_avg:.0f}). Esperando confirmación."
                 elif is_uptrend:
                     reason = f"[{regime}] Tendencia alcista (ADX={last_adx:.1f}) sin pullback (P={current_price} > EMA_fast={last_ema_fast:.2f})"
                 else:
@@ -634,10 +647,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 # Mean Reversion Exit: RSI alto + sobre BB media + en profit
                 signal = "sell"
                 reason = f"[RANGO] Mean Reversion Exit: RSI={last_rsi:.1f}>65, P={current_price}>=BB_mid={last_bb_mid:.2f}, P&L={pnl_pct:.2f}%"
-            elif pnl_pct > 1.5 and (last_gap < prev_gap or macd_cross_down):
+            elif pnl_pct > 2.5 and (last_gap < prev_gap or macd_cross_down):
                 signal = "sell"
                 reason = f"Toma de ganancias: P&L={pnl_pct:.2f}% (MACD bajista={macd_cross_down}, Gap decreciente={last_gap:.4f}<{prev_gap:.4f})"
-            elif macd_cross_down and pnl_pct > 0.5:
+            elif macd_cross_down and pnl_pct > 1.0:
                 signal = "sell"
                 reason = f"Venta preventiva: MACD bajista + profit {pnl_pct:.2f}%"
             else:
