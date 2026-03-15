@@ -432,8 +432,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     invest_pct_ranging = getattr(config, "invest_percentage_ranging", 15.0) or 15.0
     
     # Pro params
-    trailing_activation = getattr(config, "trailing_stop_activation", 1.5)
-    trailing_distance = getattr(config, "trailing_stop_distance", 0.5)
+    trailing_activation = getattr(config, "trailing_stop_activation", 2.5)
+    trailing_distance = getattr(config, "trailing_stop_distance", 0.8)
     macro_tf = getattr(config, "macro_timeframe", "1h")
     risk_profile = getattr(config, "risk_profile", "conservador")
     use_vwap = getattr(config, "use_vwap_filter", False)
@@ -482,6 +482,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi, compute_volume_avg
         ema_fast = compute_ema(df["close"], ema_fast_len)
         ema_slow = compute_ema(df["close"], ema_slow_len)
+        ema_50 = compute_ema(df["close"], 50)
         ema_200 = compute_ema(df["close"], 200)
         adx = compute_adx(df["high"], df["low"], df["close"], adx_period)
         bb_upper, bb_mid, bb_lower = compute_bollinger_bands(df["close"], 20, 2.0)
@@ -551,12 +552,13 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         )
 
         # ════════════════════════════════════════════════════════════
-        # 4. LÓGICA DUAL DE ESTRATEGIA (Régimen de mercado)
+        # 4. LÓGICA DE DETECCIÓN DE RÉGIMEN Y ESTRATEGIA
         # ════════════════════════════════════════════════════════════
         last_ema_fast = float(ema_fast.iloc[-1])
         prev_ema_fast = float(ema_fast.iloc[-2])
         last_ema_slow = float(ema_slow.iloc[-1])
         prev_ema_slow = float(ema_slow.iloc[-2])
+        last_ema_50 = float(ema_50.iloc[-1])
         last_adx = float(adx.iloc[-1])
         
         last_gap = last_ema_fast - last_ema_slow
@@ -565,112 +567,124 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         holdings = portfolio_ctx.get("holdings", 0.0)
         has_open_position = (holdings * current_price) > 5.0 if current_price else False
         
-        # Detectar régimen de mercado
-        is_trending = last_adx > adx_thresh
-        regime = "TENDENCIA" if is_trending else "RANGO"
-        user_logger.info("Régimen de mercado: %s (ADX=%.1f, umbral=%d)", regime, last_adx, adx_thresh)
+        # --- 4.1 Definir Régimen de Mercado ---
+        # Rango: ADX < 25
+        # Bull/Bear: ADX >= 25 evaluado con Precio, EMA 200 y EMA 50
+        is_trending = last_adx >= adx_thresh
+        regime = "RANGO"
+        if is_trending:
+            if current_price and current_price > last_ema_200 and last_ema_50 > last_ema_200:
+                regime = "BULL"
+            elif current_price and current_price < last_ema_200 and last_ema_50 < last_ema_200:
+                regime = "BEAR"
+            else:
+                # Escenario de transición, asume RANGO para ser prudente
+                regime = "RANGO"
+                
+        user_logger.info("Régimen de mercado: %s (ADX=%.1f, umbral=%d, EMA50=%.2f, EMA200=%.2f)", regime, last_adx, adx_thresh, last_ema_50, last_ema_200)
         
         signal = "hold"
         reason = "Esperando señal..."
         amount_to_invest = 0.0
         strategy_name = ""
+        free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
         
         if not has_open_position:
             # ─── COMPRA ───
-            if is_trending:
-                # ═══ ESTRATEGIA TENDENCIAL: EMA Crossover + Pullback ═══
-                strategy_name = "EMA Crossover"
-                is_uptrend = last_ema_fast > last_ema_slow
+            # --- Perfiles de Riesgo y Flexibilidades ---
+            # VWAP & Daily Open filters
+            filter_vwap_pass = True if not use_vwap else (current_price > last_vwap)
+            filter_daily_pass = True if not use_daily else (current_price > last_daily_open)
+            filter_vol_pass = True if risk_profile in ["muy_agresivo", "agresivo"] else volume_ok
+            filter_macro_pass = True if risk_profile in ["muy_agresivo", "agresivo"] else macro_uptrend
+            
+            # Ajustar umbrales según perfil
+            rsi_rango_threshold = 25
+            if risk_profile == "suave": rsi_rango_threshold = 20
+            elif risk_profile == "agresivo": rsi_rango_threshold = 28
+            elif risk_profile == "muy_agresivo": rsi_rango_threshold = 30
+
+            if regime == "BULL":
+                # ═══ ESTRATEGIA TENDENCIAL BULL: Pullback a EMA ═══
+                strategy_name = "Trend Following - Bull"
+                is_uptrend_local = last_ema_fast > last_ema_slow
                 is_pullback = current_price is not None and current_price <= (last_ema_fast * 1.005)
                 
-                # Bypasses según Perfil de Riesgo
-                use_macro = risk_profile not in ["muy_agresivo"]
-                use_ema200 = risk_profile not in ["agresivo", "muy_agresivo"]
-                use_vol = risk_profile not in ["agresivo", "muy_agresivo"]
-                
-                macro_pass = macro_uptrend if use_macro else True
-                ema200_pass = price_above_ema200 if use_ema200 else True
-                vol_pass = volume_ok if use_vol else True
-                
-                if is_uptrend and is_pullback and macro_pass and ema200_pass and vol_pass:
-                    blocked = False
-                    block_reason = ""
-                    if use_vwap and current_price < last_vwap:
-                        blocked = True
-                        block_reason = f"VWAP (P={current_price} < {last_vwap:.2f})"
-                    if use_daily and current_price < last_daily_open:
-                        blocked = True
-                        block_reason = f"Daily Open (P={current_price} < {last_daily_open:.2f})"
-                        
-                    if blocked:
-                        reason = f"[{regime}] Pullback alcista bloqueado por filtro intradiario: {block_reason}"
+                if is_uptrend_local and is_pullback:
+                    if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass or not filter_vol_pass or not filter_macro_pass):
+                        reason = f"[BULL] Compra bloqueada por perfil Suave (VWAP/Daily/Vol/Macro falló)"
+                    elif risk_profile == "conservador" and (not filter_vwap_pass or not filter_macro_pass):
+                        reason = f"[BULL] Compra bloqueada por perfil Conservador (VWAP o Macro bajista)"
                     else:
                         signal = "buy"
-                        reason = f"[{regime}] Pullback alcista (ADX={last_adx:.1f}, P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f}, RIESGO={risk_profile.upper()})"
-                        free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                        reason = f"[BULL] Trend Following: Pullback detectado (P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f})"
                         amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
-                elif is_uptrend and not macro_pass:
-                    reason = f"[{regime}] Tendencia alcista pero Macro {macro_tf} bajista. Compra bloqueada."
-                elif is_uptrend and not ema200_pass:
-                    reason = f"[{regime}] Tendencia alcista pero P={current_price} < EMA200={last_ema_200:.2f}. Compra bloqueada."
-                elif is_uptrend and not vol_pass:
-                    reason = f"[{regime}] Tendencia alcista pero volumen bajo ({last_volume:.0f} < avg {last_vol_avg:.0f}). Esperando confirmación."
-                elif is_uptrend:
-                    reason = f"[{regime}] Tendencia alcista (ADX={last_adx:.1f}) sin pullback (P={current_price} > EMA_fast={last_ema_fast:.2f})"
                 else:
-                    reason = f"[{regime}] EMA bajista (EMA_fast={last_ema_fast:.2f} < EMA_slow={last_ema_slow:.2f})"
-            else:
-                # ═══ ESTRATEGIA MEAN REVERSION: Bollinger + RSI ═══
-                strategy_name = "Mean Reversion"
-                is_oversold = last_rsi < 35
-                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.002  # 0.2% margen
+                    reason = f"[BULL] Esperando pullback a EMA Rápida ({last_ema_fast:.2f})"
+
+            elif regime == "BEAR":
+                # ═══ ESTRATEGIA BEAR: Protección o Mean Reversion Extrema ═══
+                strategy_name = "Protección - Bear"
+                if risk_profile in ["suave", "conservador"]:
+                    reason = f"[BEAR] Bloqueado. Perfil {risk_profile} no opera en tendencia bajista."
+                else:
+                    # En Agresivo/Muy Agresivo: busca rebote extremo
+                    rsi_rebote_extremo = 15 if risk_profile == "agresivo" else 20
+                    is_oversold_brutal = last_rsi < rsi_rebote_extremo
+                    is_at_bb_lower = current_price is not None and current_price <= last_bb_lower
+                    
+                    if is_oversold_brutal and is_at_bb_lower:
+                        signal = "buy"
+                        reason = f"[BEAR] Mean Reversion Extrema (Contratendencia): RSI={last_rsi:.1f}<{rsi_rebote_extremo} y en BB Inferior"
+                        amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
+                    else:
+                        reason = f"[BEAR] Buscando sobreventa extrema (RSI<{rsi_rebote_extremo}) para rebote"
+
+            elif regime == "RANGO":
+                # ═══ ESTRATEGIA MEAN REVERSION: RSI + Bollinger ═══
+                strategy_name = "Mean Reversion - Rango"
+                is_oversold = last_rsi < rsi_rango_threshold
+                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.002
                 
                 if is_oversold and is_at_bb_lower:
-                    blocked = False
-                    block_reason = ""
-                    if use_vwap and current_price < last_vwap:
-                        blocked = True
-                        block_reason = f"VWAP ({current_price} < {last_vwap:.2f})"
-                    if use_daily and current_price < last_daily_open:
-                        blocked = True
-                        block_reason = f"Daily Open ({current_price} < {last_daily_open:.2f})"
-                        
-                    if blocked:
-                        reason = f"[{regime}] Mean Reversion bloqueado por filtro bajista intradiario: {block_reason}"
+                    if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass):
+                        reason = f"[RANGO] Bloqueado por perfil Suave (Filtros Intradiarios negativos)"
                     else:
                         signal = "buy"
-                        reason = f"[{regime}] Mean Reversion: RSI={last_rsi:.1f}<35 + Precio={current_price} <= BB_lower={last_bb_lower:.2f} (oversold en rango)"
-                        free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+                        reason = f"[RANGO] Mean Reversion: RSI={last_rsi:.1f}<{rsi_rango_threshold} + P={current_price} <= BB_lower={last_bb_lower:.2f}"
                         amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
-                elif is_oversold:
-                    reason = f"[{regime}] RSI oversold ({last_rsi:.1f}) pero precio {current_price} aún sobre BB_lower {last_bb_lower:.2f}"
-                elif is_at_bb_lower:
-                    reason = f"[{regime}] Precio cerca de BB_lower ({last_bb_lower:.2f}) pero RSI={last_rsi:.1f} no oversold (<35)"
                 else:
-                    reason = f"[{regime}] Sin señal de compra (RSI={last_rsi:.1f}, BB_lower={last_bb_lower:.2f}, P={current_price})"
+                    reason = f"[RANGO] Esperando sobreventa (RSI<{rsi_rango_threshold} y BB_lower)"
         else:
             # ─── VENTA (con posición abierta) ───
             avg_entry_price = portfolio_ctx.get("avg_entry_price", 0.0)
             pnl_pct = portfolio_ctx.get("pnl_pct", 0.0)
             
-            # Recuperar max_price de DB para trailing stop
+            # Recuperar variables para Trailing Stop, Break-Even y Time-Stop
             max_pnl_pct = 0.0
+            trade_duration_hours = 0.0
             try:
                 db = SessionLocal()
                 try:
                     open_trades = db.query(Trade).filter(Trade.user_id == user.id, Trade.pair == pair, Trade.side == 'buy').order_by(Trade.timestamp.desc()).all()
                     if open_trades:
-                        last_max = open_trades[0].max_price_reached or 0.0
+                        last_trade = open_trades[0]
+                        # Calc max pnl
+                        last_max = last_trade.max_price_reached or 0.0
                         if current_price and current_price > last_max:
-                            open_trades[0].max_price_reached = current_price
+                            last_trade.max_price_reached = current_price
                             db.commit()
                             last_max = current_price
                         if avg_entry_price > 0:
                             max_pnl_pct = ((last_max - avg_entry_price) / avg_entry_price) * 100
+                        # Calc time duration
+                        if last_trade.timestamp:
+                            delta = datetime.utcnow() - last_trade.timestamp
+                            trade_duration_hours = delta.total_seconds() / 3600.0
                 finally:
                     db.close()
             except Exception as e:
-                user_logger.warning("Error con Trailing Stop DB: %s", e)
+                user_logger.warning("Error consultando Trade DB para Venta: %s", e)
                 
             # Verificar MACD
             last_macd = indicators_dict.get("macd_line")
@@ -679,6 +693,17 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             if last_macd is not None and last_macd_signal is not None:
                 macd_cross_down = last_macd < last_macd_signal
             
+            # Evaluar Break-Even Dinámico
+            dynamic_stop_loss = stop_loss
+            if max_pnl_pct >= 1.2:
+                # Si llegó a ganar +1.2%, el Stop Loss se vuelve +0.1% (Break-Even)
+                dynamic_stop_loss = -0.1
+
+            # Evaluar Time-Stop
+            is_time_stop = False
+            if trade_duration_hours >= 6.0 and pnl_pct > -stop_loss and pnl_pct < 1.0 and not is_trending:
+                is_time_stop = True
+
             # Evaluar Trailing Stop
             is_trailing_stop = False
             if max_pnl_pct >= trailing_activation and pnl_pct <= (max_pnl_pct - trailing_distance):
@@ -688,9 +713,15 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             if is_trailing_stop:
                 signal = "sell"
                 reason = f"Trailing Stop: Cae a {pnl_pct:.2f}% desde máximo {max_pnl_pct:.2f}%"
-            elif pnl_pct <= -stop_loss:
+            elif pnl_pct <= -dynamic_stop_loss:
                 signal = "sell"
-                reason = f"Stop Loss: {pnl_pct:.2f}% <= -{stop_loss}%"
+                if dynamic_stop_loss == -0.1:
+                    reason = f"Break-Even Stop: Salida sin pérdidas en {pnl_pct:.2f}% (Máximo previo {max_pnl_pct:.2f}%)"
+                else:
+                    reason = f"Stop Loss: {pnl_pct:.2f}% <= -{stop_loss}%"
+            elif is_time_stop:
+                signal = "sell"
+                reason = f"Time-Stop: Agotamiento de tendencia ({trade_duration_hours:.1f} horas estancado). P&L={pnl_pct:.2f}%"
             elif not is_trending and last_rsi > 65 and current_price >= last_bb_mid and pnl_pct > 0:
                 # Mean Reversion Exit: RSI alto + sobre BB media + en profit
                 signal = "sell"
@@ -702,7 +733,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 signal = "sell"
                 reason = f"Venta preventiva: MACD bajista + profit {pnl_pct:.2f}%"
             else:
-                reason = f"Hold: P&L={pnl_pct:.2f}% (Max={max_pnl_pct:.2f}%, RSI={last_rsi:.1f}, Régimen={regime})"
+                sl_label = f"BE:0.1%" if dynamic_stop_loss == -0.1 else f"SL:-{stop_loss}%"
+                reason = f"Hold: P&L={pnl_pct:.2f}% (Max={max_pnl_pct:.2f}%, {sl_label}, RSI={last_rsi:.1f})"
 
         signal_data = {
             "signal": signal,

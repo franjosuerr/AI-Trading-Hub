@@ -390,7 +390,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     pairs: 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT', timeframe: '15m', candle_count: 350,
     pair_delay: 2, max_trades_per_day: 10, stop_loss_percent: 3.0, max_exposure_percent: 80.0, cooldown_minutes: 120, log_level: 'INFO',
     ema_fast: 7, ema_slow: 30, adx_period: 14, adx_threshold: 25, invest_percentage: 25.0, invest_percentage_ranging: 15.0, risk_profile: 'suave',
-    use_vwap_filter: true, use_daily_open_filter: true
+    use_vwap_filter: true, use_daily_open_filter: false
   });
   const [isGlobalModalOpen, setIsGlobalModalOpen] = useState(false);
   const [statsUserId, setStatsUserId] = useState(null);
