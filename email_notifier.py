@@ -8,6 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
+from utils import get_colombia_time
 from backend.logger_config import get_logger
 
 logger = get_logger("email_notifier")
@@ -58,7 +59,7 @@ def _build_trade_html(
     rsi = indicators.get("rsi")
     rsi_color = "#ef4444" if rsi and rsi > 70 else "#10b981" if rsi and rsi < 30 else "#6b7280"
 
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = get_colombia_time().strftime("%Y-%m-%d %H:%M:%S UTC-5")
 
     html = f"""
     <!DOCTYPE html>

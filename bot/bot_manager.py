@@ -24,6 +24,7 @@ from indicators import compute_all_indicators
 from utils import (
     SIGNAL_LABEL_ES,
     round_to_precision,
+    get_colombia_time
 )
 from email_notifier import send_trade_email
 
@@ -326,7 +327,7 @@ def _check_recent_trades_cooldown(user_id: int, pair: str, cooldown_minutes: int
     try:
         db = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+            cutoff = get_colombia_time() - timedelta(minutes=cooldown_minutes)
             recent = db.query(Trade).filter(
                 Trade.user_id == user_id,
                 Trade.pair == pair,
@@ -351,7 +352,7 @@ def _check_stop_loss_cooldown(user_id: int, pair: str, cooldown_minutes: int, lo
     try:
         db = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+            cutoff = get_colombia_time() - timedelta(minutes=cooldown_minutes)
             recent_sl = db.query(Trade).filter(
                 Trade.user_id == user_id,
                 Trade.pair == pair,
@@ -439,7 +440,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     use_vwap = getattr(config, "use_vwap_filter", False)
     use_daily = getattr(config, "use_daily_open_filter", False)
 
-    cycle_start = datetime.utcnow().isoformat()
+    cycle_start = get_colombia_time().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
 
     # Balance al inicio
@@ -677,7 +678,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                             max_pnl_pct = ((last_max - avg_entry_price) / avg_entry_price) * 100
                         # Calc time duration
                         if last_trade.timestamp:
-                            delta = datetime.utcnow() - last_trade.timestamp
+                            delta = get_colombia_time() - last_trade.timestamp
                             trade_duration_hours = delta.total_seconds() / 3600.0
                 finally:
                     db.close()
@@ -799,7 +800,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         try:
             db = SessionLocal()
             try:
-                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                today_start = get_colombia_time().replace(hour=0, minute=0, second=0, microsecond=0)
                 trades_today = db.query(Trade).filter(
                     Trade.user_id == user.id,
                     Trade.pair == pair,

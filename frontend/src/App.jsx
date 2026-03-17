@@ -344,7 +344,7 @@ function UserStatsModal({ userId, userName, onClose }) {
                     <tbody>
                       {stats.recent_trades.map((t, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <td style={{ padding: '8px', color: '#999' }}>{new Date(t.timestamp).toLocaleString('es', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}</td>
+                          <td style={{ padding: '8px', color: '#999' }}>{`${t.timestamp.slice(8,10)}/${t.timestamp.slice(5,7)} ${t.timestamp.slice(11,16)}`}</td>
                           <td style={{ padding: '8px', fontWeight: '600' }}>{t.pair}</td>
                           <td style={{ padding: '8px', textAlign: 'center' }}>
                             <span style={{ background: t.side === 'buy' ? 'rgba(0,242,255,0.1)' : 'rgba(255,85,136,0.1)', color: t.side === 'buy' ? '#00f2ff' : '#ff5588', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '700' }}>

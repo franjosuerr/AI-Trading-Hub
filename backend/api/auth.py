@@ -9,6 +9,9 @@ import jwt
 import bcrypt
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Request, Depends
+
+def get_colombia_time():
+    return datetime.utcnow() - timedelta(hours=5)
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models.models import User
@@ -34,13 +37,13 @@ def _verify_password(password: str, hashed: str) -> bool:
 
 
 def _create_token(user: User) -> str:
-    expire = datetime.utcnow() + timedelta(hours=TOKEN_EXPIRE_HOURS)
+    expire = get_colombia_time() + timedelta(hours=TOKEN_EXPIRE_HOURS)
     payload = {
         "sub": str(user.id),
         "email": user.email,
         "role": user.role,
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": get_colombia_time(),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 

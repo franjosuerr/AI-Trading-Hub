@@ -10,6 +10,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import ccxt
 
+def get_colombia_time():
+    return datetime.utcnow() - timedelta(hours=5)
+
 router = APIRouter(prefix="/stats", tags=["Statistics"])
 
 
@@ -112,7 +115,7 @@ def get_monthly_stats(user_id: int, request: Request, month: str = None, db: Ses
         except ValueError:
             raise HTTPException(status_code=400, detail="Formato de mes inválido. Usa YYYY-MM")
     else:
-        now = datetime.utcnow()
+        now = get_colombia_time()
         year, mon = now.year, now.month
 
     # Inicio y fin del mes
