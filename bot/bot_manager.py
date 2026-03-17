@@ -319,6 +319,46 @@ def _send_telegram_for_user(user, text, tg_logger=None):
         log.warning("Telegram: error inesperado al enviar: %s", str(e)[:150])
         return False
 
+def _send_telegram_document_for_user(user, doc_path: str, tg_logger=None):
+    """Envía un archivo por Telegram usando las credenciales del usuario."""
+    log = tg_logger or logger
+    token = getattr(user, 'telegram_bot_token', None)
+    chat_id = getattr(user, 'telegram_chat_id', None)
+    if not token or not chat_id:
+        log.info("Telegram: sin credenciales para enviar documento.")
+        return False
+    if not os.path.exists(doc_path):
+        log.warning("Telegram: el archivo %s no existe.", doc_path)
+        return False
+        
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    log.info("Telegram: enviando documento %s...", doc_path)
+    try:
+        # Extraemos el nombre base para el archivo enviado
+        filename = os.path.basename(doc_path)
+        with open(doc_path, 'rb') as f:
+            r = requests.post(
+                url, 
+                data={"chat_id": chat_id, "caption": f"📄 Tu archivo de actividad diaria ({filename})"}, 
+                files={"document": f},
+                timeout=30
+            )
+        if r.status_code == 200:
+            log.info("Telegram: documento enviado OK.")
+            return True
+        else:
+            log.warning("Telegram: API devolvió código %s al enviar doc: %s", r.status_code, r.text[:100])
+            return False
+    except requests.exceptions.Timeout:
+        log.warning("Telegram: timeout al enviar documento.")
+        return False
+    except requests.exceptions.ConnectionError:
+        log.warning("Telegram: error de red al enviar documento.")
+        return False
+    except Exception as e:
+        log.warning("Telegram: error inesperado al enviar documento: %s", str(e)[:150])
+        return False
+
 
 # ─── Utilidad: cooldown post-reinicio ───
 
@@ -1172,6 +1212,8 @@ class BotManager:
         user_logger.info("Entrando al bucle principal de trading...")
 
         cycle_count = 0
+        last_log_sent_date = None
+
         try:
             while True:
                 cycle_count += 1
@@ -1201,6 +1243,15 @@ class BotManager:
                     await asyncio.to_thread(_send_telegram_for_user, user, f"🚨 Error en ciclo #{cycle_count}: {str(e)[:200]}")
                     await asyncio.sleep(60)
                     continue
+
+                # --- Envío Diario de Logs ---
+                current_time = get_colombia_time()
+                current_date = current_time.date()
+                if current_time.hour == 23 and last_log_sent_date != current_date:
+                    user_logger.info("Hora de cierre (23:00). Enviando log diario a Telegram...")
+                    log_file_path = os.path.join("logs", "bots", f"user_{user_id}.log")
+                    await asyncio.to_thread(_send_telegram_document_for_user, user, log_file_path, user_logger)
+                    last_log_sent_date = current_date
 
                 user_logger.info("Próximo ciclo en %s segundos.", interval)
                 await asyncio.sleep(interval)
