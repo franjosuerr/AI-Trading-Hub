@@ -156,13 +156,19 @@ function UserStatsModal({ userId, userName, onClose }) {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(null);
   const [balanceLoading, setBalanceLoading] = useState(true);
+  const [openPositions, setOpenPositions] = useState([]);
+  const [positionsLoading, setPositionsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('trades'); // 'trades' | 'positions'
   const [currentMonth, setCurrentMonth] = useState(() => {
     const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
     return `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}`;
   });
 
   useEffect(() => { fetchStats(); }, [currentMonth]);
-  useEffect(() => { fetchBalance(); }, []);
+  useEffect(() => { 
+    fetchBalance(); 
+    fetchOpenPositions();
+  }, []);
 
   const fetchBalance = async () => {
     setBalanceLoading(true);
@@ -180,6 +186,15 @@ function UserStatsModal({ userId, userName, onClose }) {
       setStats(res.data);
     } catch (err) { console.error('Error fetching stats:', err); }
     finally { setLoading(false); }
+  };
+
+  const fetchOpenPositions = async () => {
+    setPositionsLoading(true);
+    try {
+      const res = await api.get(`/stats/${userId}/open_positions`);
+      setOpenPositions(res.data?.open_positions || []);
+    } catch (err) { console.error('Error fetching open positions:', err); }
+    finally { setPositionsLoading(false); }
   };
 
   const changeMonth = (delta) => {
@@ -326,41 +341,110 @@ function UserStatsModal({ userId, userName, onClose }) {
                 </ResponsiveContainer>
               </div>
             )}
-            {(stats?.recent_trades || []).length > 0 && (
-              <div className="glass-panel" style={{ padding: '20px' }}>
-                <h3 style={{ fontSize: '0.8rem', color: 'var(--text-dim)', fontWeight: '700', marginBottom: '16px' }}>ÚLTIMOS TRADES</h3>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>FECHA</th>
-                        <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>PAR</th>
-                        <th style={{ textAlign: 'center', padding: '8px', color: 'var(--text-dim)' }}>LADO</th>
-                        <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>CANTIDAD</th>
-                        <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PRECIO</th>
-                        <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PROFIT</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.recent_trades.map((t, i) => (
-                        <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <td style={{ padding: '8px', color: '#999' }}>{`${t.timestamp.slice(8,10)}/${t.timestamp.slice(5,7)} ${t.timestamp.slice(11,16)}`}</td>
-                          <td style={{ padding: '8px', fontWeight: '600' }}>{t.pair}</td>
-                          <td style={{ padding: '8px', textAlign: 'center' }}>
-                            <span style={{ background: t.side === 'buy' ? 'rgba(0,242,255,0.1)' : 'rgba(255,85,136,0.1)', color: t.side === 'buy' ? '#00f2ff' : '#ff5588', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '700' }}>
-                              {t.side === 'buy' ? 'COMPRA' : 'VENTA'}
-                            </span>
-                          </td>
-                          <td style={{ padding: '8px', textAlign: 'right' }}>{t.amount}</td>
-                          <td style={{ padding: '8px', textAlign: 'right' }}>${t.price}</td>
-                          <td style={{ padding: '8px', textAlign: 'right', color: t.profit >= 0 ? '#00ff88' : '#ff5588', fontWeight: '600' }}>${t.profit.toFixed(4)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            
+            {/* TABS CONTAINER */}
+            <div className="glass-panel" style={{ padding: '20px', marginTop: '1.5rem', background: 'rgba(0,0,0,0.15)' }}>
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '10px' }}>
+                <button 
+                  onClick={() => setActiveTab('trades')}
+                  style={{ background: 'transparent', border: 'none', color: activeTab === 'trades' ? '#00f2ff' : 'var(--text-dim)', fontSize: '0.85rem', fontWeight: '800', cursor: 'pointer', padding: '6px 12px', borderBottom: activeTab === 'trades' ? '2px solid #00f2ff' : '2px solid transparent', transition: 'all 0.2s' }}
+                >
+                  ÚLTIMOS TRADES
+                </button>
+                <button 
+                  onClick={() => setActiveTab('positions')}
+                  style={{ background: 'transparent', border: 'none', color: activeTab === 'positions' ? '#ffaa00' : 'var(--text-dim)', fontSize: '0.85rem', fontWeight: '800', cursor: 'pointer', padding: '6px 12px', borderBottom: activeTab === 'positions' ? '2px solid #ffaa00' : '2px solid transparent', transition: 'all 0.2s' }}
+                >
+                  COMPRAS PENDIENTES
+                </button>
               </div>
-            )}
+
+              {/* TAB CONTENT: ÚLTIMOS TRADES */}
+              {activeTab === 'trades' && (
+                <>
+                  {(stats?.recent_trades || []).length > 0 ? (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                            <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>FECHA</th>
+                            <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>PAR</th>
+                            <th style={{ textAlign: 'center', padding: '8px', color: 'var(--text-dim)' }}>LADO</th>
+                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>CANTIDAD</th>
+                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PRECIO</th>
+                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PROFIT</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.recent_trades.map((t, i) => (
+                            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                              <td style={{ padding: '8px', color: '#999' }}>{`${t.timestamp.slice(8,10)}/${t.timestamp.slice(5,7)} ${t.timestamp.slice(11,16)}`}</td>
+                              <td style={{ padding: '8px', fontWeight: '600' }}>{t.pair}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>
+                                <span style={{ background: t.side === 'buy' ? 'rgba(0,242,255,0.1)' : 'rgba(255,85,136,0.1)', color: t.side === 'buy' ? '#00f2ff' : '#ff5588', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '700' }}>
+                                  {t.side === 'buy' ? 'COMPRA' : 'VENTA'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '8px', textAlign: 'right' }}>{t.amount}</td>
+                              <td style={{ padding: '8px', textAlign: 'right' }}>${t.price}</td>
+                              <td style={{ padding: '8px', textAlign: 'right', color: t.profit >= 0 ? '#00ff88' : '#ff5588', fontWeight: '600' }}>${t.profit.toFixed(4)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>No hay trades recientes para mostrar.</div>
+                  )}
+                </>
+              )}
+
+              {/* TAB CONTENT: COMPRAS PENDIENTES */}
+              {activeTab === 'positions' && (
+                <>
+                  {positionsLoading ? (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>Cargando posiciones...</div>
+                  ) : openPositions.length > 0 ? (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                            <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>PAR / ACTIVO</th>
+                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>CANTIDAD PENDIENTE</th>
+                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PRECIO ENT. PROMEDIO</th>
+                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>USDT TOTAL INVERTIDO</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {openPositions.map((p, i) => (
+                            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                              <td style={{ padding: '8px', fontWeight: '700', color: '#fff' }}>{p.pair} <span style={{ fontSize: '0.65rem', background: 'rgba(255,170,0,0.1)', color: '#ffaa00', padding: '2px 5px', borderRadius: '3px', marginLeft: '6px' }}>PENDIENTE</span></td>
+                              <td style={{ padding: '8px', textAlign: 'right', color: '#00f2ff' }}>{p.amount}</td>
+                              <td style={{ padding: '8px', textAlign: 'right' }}>${p.avg_entry_price}</td>
+                              <td style={{ padding: '8px', textAlign: 'right', fontWeight: '900', color: '#00ff88' }}>${p.total_invested} USDT</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan="3" style={{ padding: '12px 8px', textAlign: 'right', color: 'var(--text-dim)', fontWeight: '700', fontSize: '0.9rem' }}>TOTAL INVERTIDO ATRAPADO:</td>
+                            <td style={{ padding: '12px 8px', textAlign: 'right', color: '#ffaa00', fontWeight: '900', fontSize: '1rem' }}>
+                              ${openPositions.reduce((acc, crr) => acc + crr.total_invested, 0).toLocaleString('en-US', {minimumFractionDigits:2})}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>
+                      <Shield size={32} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
+                      <p>Excelente, no tienes compras atrapadas. Todo está en USDT.</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            
             {s.total_trades === 0 && (
               <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-dim)' }}>
                 <BarChart3 size={48} style={{ marginBottom: '1rem', opacity: 0.3 }} />

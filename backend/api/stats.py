@@ -216,3 +216,53 @@ def get_monthly_stats(user_id: int, request: Request, month: str = None, db: Ses
         ],
         "recent_trades": recent_trades
     }
+
+@router.get("/{user_id}/open_positions")
+def get_open_positions(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    Calcula las posiciones abiertas del bot basándose en el historial de BD.
+    Suma las compras, resta las ventas. Si queda saldo > 0.0001, es una posición abierta.
+    """
+    current = get_current_user_from_token(request)
+    if current["role"] != "admin" and int(current["sub"]) != user_id:
+        raise HTTPException(status_code=403, detail="No tienes acceso")
+
+    # Obtener TODO el historial ordenado por antigüedad
+    trades = db.query(Trade).filter(Trade.user_id == user_id).order_by(Trade.timestamp.asc()).all()
+    
+    # Estructura: diccionarios agrupados por moneda
+    # pair -> {"amount": float, "total_cost": float}
+    positions = defaultdict(lambda: {"amount": 0.0, "total_cost": 0.0})
+
+    for t in trades:
+        if t.side == "buy":
+            positions[t.pair]["amount"] += t.amount
+            positions[t.pair]["total_cost"] += (t.amount * t.price)
+        elif t.side == "sell":
+            # Para ventas, restamos el monto. 
+            # También reducimos el total_cost proporcionalmente al amount vendido.
+            prev_amount = positions[t.pair]["amount"]
+            if prev_amount > 0:
+                cost_reduction_ratio = min(t.amount / prev_amount, 1.0)
+                positions[t.pair]["total_cost"] -= (positions[t.pair]["total_cost"] * cost_reduction_ratio)
+            
+            positions[t.pair]["amount"] -= t.amount
+            if positions[t.pair]["amount"] < 0.0001:
+                positions[t.pair]["amount"] = 0.0
+                positions[t.pair]["total_cost"] = 0.0
+
+    # Formatear el resultado filtrando posiciones diminutas (polvo)
+    open_positions = []
+    for pair, data in positions.items():
+        if data["amount"] > 0.0001:
+            avg_entry = data["total_cost"] / data["amount"] if data["amount"] > 0 else 0
+            open_positions.append({
+                "pair": pair,
+                "amount": round(data["amount"], 8),
+                "avg_entry_price": round(avg_entry, 6),
+                "total_invested": round(data["total_cost"], 2)
+            })
+
+    # Ordenar por el que tiene más dinero invertido
+    open_positions.sort(key=lambda x: x["total_invested"], reverse=True)
+    return {"open_positions": open_positions}
