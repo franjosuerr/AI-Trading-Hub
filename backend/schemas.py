@@ -38,6 +38,12 @@ class UserBase(BaseModel):
     use_vwap_filter: bool = False
     use_daily_open_filter: bool = False
 
+    # Horario Nocturno
+    schedule_enabled: bool = False
+    schedule_start_hour: int = 22
+    schedule_end_hour: int = 6
+    schedule_risk_profile: str = "suave"
+
 class UserCreate(UserBase):
     password: str
 
@@ -77,6 +83,12 @@ class UserUpdate(BaseModel):
     
     use_vwap_filter: Optional[bool] = None
     use_daily_open_filter: Optional[bool] = None
+
+    # Horario Nocturno
+    schedule_enabled: Optional[bool] = None
+    schedule_start_hour: Optional[int] = None
+    schedule_end_hour: Optional[int] = None
+    schedule_risk_profile: Optional[str] = None
 
 class UserResponse(UserBase):
     id: int

@@ -480,6 +480,49 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     use_vwap = getattr(config, "use_vwap_filter", False)
     use_daily = getattr(config, "use_daily_open_filter", False)
 
+    # ─── Horario Nocturno: Override de perfil de riesgo por franja horaria ───
+    schedule_enabled = getattr(config, "schedule_enabled", False)
+    _schedule_active = False
+    if schedule_enabled:
+        schedule_start = getattr(config, "schedule_start_hour", 22)
+        schedule_end = getattr(config, "schedule_end_hour", 6)
+        schedule_profile = getattr(config, "schedule_risk_profile", "suave")
+        current_hour = get_colombia_time().hour
+
+        # Determinar si estamos en la ventana (soporta cruces de medianoche, ej. 22→6)
+        if schedule_start > schedule_end:
+            _schedule_active = current_hour >= schedule_start or current_hour < schedule_end
+        else:
+            _schedule_active = schedule_start <= current_hour < schedule_end
+
+        if _schedule_active:
+            user_logger.info(
+                "🌙 Horario Nocturno ACTIVO (hora=%02d:00, ventana=%02d:00-%02d:00). Perfil: %s → %s",
+                current_hour, schedule_start, schedule_end, risk_profile, schedule_profile
+            )
+            risk_profile = schedule_profile
+            # Aplicar presets del perfil nocturno
+            _RISK_PRESETS = {
+                "suave": {"invest_percentage": 10.0, "invest_percentage_ranging": 5.0, "ema_fast": 12, "ema_slow": 26, "stop_loss_percent": 2.0, "trailing_stop_activation": 1.0, "trailing_stop_distance": 0.3},
+                "conservador": {"invest_percentage": 25.0, "invest_percentage_ranging": 15.0, "ema_fast": 7, "ema_slow": 30, "stop_loss_percent": 3.0, "trailing_stop_activation": 1.5, "trailing_stop_distance": 0.5},
+                "agresivo": {"invest_percentage": 50.0, "invest_percentage_ranging": 30.0, "ema_fast": 5, "ema_slow": 20, "stop_loss_percent": 4.0, "trailing_stop_activation": 2.0, "trailing_stop_distance": 1.0},
+                "muy_agresivo": {"invest_percentage": 90.0, "invest_percentage_ranging": 50.0, "ema_fast": 3, "ema_slow": 10, "stop_loss_percent": 6.0, "trailing_stop_activation": 3.0, "trailing_stop_distance": 1.5},
+            }
+            preset = _RISK_PRESETS.get(schedule_profile, {})
+            if preset:
+                invest_pct_trending = preset["invest_percentage"]
+                invest_pct_ranging = preset["invest_percentage_ranging"]
+                ema_fast_len = preset["ema_fast"]
+                ema_slow_len = preset["ema_slow"]
+                stop_loss = preset["stop_loss_percent"]
+                trailing_activation = preset["trailing_stop_activation"]
+                trailing_distance = preset["trailing_stop_distance"]
+        else:
+            user_logger.info(
+                "☀️ Horario Normal (hora=%02d:00, nocturno=%02d:00-%02d:00). Perfil: %s",
+                current_hour, schedule_start, schedule_end, risk_profile
+            )
+
     cycle_start = get_colombia_time().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
 
@@ -1077,8 +1120,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         await asyncio.to_thread(_send_telegram_for_user, user, "\n".join(lines))
 
     # Resumen del ciclo
+    _profile_label = f"🌙 {risk_profile} (nocturno)" if _schedule_active else f"☀️ {risk_profile}"
     summary_msg = (
         f"📋 <b>Resumen del ciclo</b>\n"
+        f"🎯 Perfil: <b>{_profile_label}</b>\n"
         f"💰 Balance inicio: {balance_summary_start}\n"
         f"💰 Balance final: {balance_summary_end}\n"
         f"📊 Señales: {len(signals_for_telegram)} | 📌 Órdenes: {len(orders_this_cycle)}"

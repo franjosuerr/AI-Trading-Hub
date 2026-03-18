@@ -1028,6 +1028,40 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                     </div>
                   </div>
 
+                  {/* Horario Nocturno */}
+                  <div style={{ background: 'rgba(100,100,255,0.05)', borderRadius: '10px', border: '1px solid rgba(100,100,255,0.15)', padding: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: configData.schedule_enabled ? '12px' : '0' }}>
+                      <input type="checkbox" id="scheduleEnabled" checked={configData.schedule_enabled || false} onChange={(e) => setConfigData({ ...configData, schedule_enabled: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#8888ff', flexShrink: 0 }} />
+                      <label htmlFor="scheduleEnabled" style={{ fontWeight: '700', color: '#aaaaff', fontSize: '0.95rem', cursor: 'pointer' }}>🌙 HORARIO NOCTURNO</label>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Cambiar perfil de riesgo por franja horaria</span>
+                    </div>
+                    {configData.schedule_enabled && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                        <div>
+                          <label style={{ fontSize: '0.78rem', fontWeight: '600', color: 'var(--text-dim)', marginBottom: '4px', display: 'block' }}>Hora Inicio</label>
+                          <select value={configData.schedule_start_hour ?? 22} onChange={(e) => setConfigData({ ...configData, schedule_start_hour: parseInt(e.target.value) })} style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '6px', color: 'white', fontSize: '0.85rem' }}>
+                            {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.78rem', fontWeight: '600', color: 'var(--text-dim)', marginBottom: '4px', display: 'block' }}>Hora Fin</label>
+                          <select value={configData.schedule_end_hour ?? 6} onChange={(e) => setConfigData({ ...configData, schedule_end_hour: parseInt(e.target.value) })} style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '6px', color: 'white', fontSize: '0.85rem' }}>
+                            {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.78rem', fontWeight: '600', color: 'var(--text-dim)', marginBottom: '4px', display: 'block' }}>Perfil Nocturno</label>
+                          <select value={configData.schedule_risk_profile || 'suave'} onChange={(e) => setConfigData({ ...configData, schedule_risk_profile: e.target.value })} style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '6px', color: 'white', fontSize: '0.85rem' }}>
+                            <option value="suave">🐢 Suave</option>
+                            <option value="conservador">🛡️ Conservador</option>
+                            <option value="agresivo">⚡ Agresivo</option>
+                            <option value="muy_agresivo">🔥 Muy Agresivo</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Modo prueba */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(0,255,136,0.05)', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,255,136,0.2)' }}>
                     <input type="checkbox" id="testMode" checked={configData.test_mode} onChange={(e) => setConfigData({ ...configData, test_mode: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: 'var(--secondary)', flexShrink: 0 }} />

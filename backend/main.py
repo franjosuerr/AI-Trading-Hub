@@ -54,6 +54,10 @@ def auto_migrate_db():
         ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
         ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
         ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
+        ("schedule_enabled", "BOOLEAN DEFAULT 0"),
+        ("schedule_start_hour", "INTEGER DEFAULT 22"),
+        ("schedule_end_hour", "INTEGER DEFAULT 6"),
+        ("schedule_risk_profile", "VARCHAR DEFAULT 'suave'"),
     ]
 
     for col_name, col_def in user_columns:

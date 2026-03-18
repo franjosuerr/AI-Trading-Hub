@@ -63,6 +63,12 @@ class User(Base):
     use_vwap_filter = Column(Boolean, default=True)
     use_daily_open_filter = Column(Boolean, default=False)
 
+    # Horario Nocturno / Schedule
+    schedule_enabled = Column(Boolean, default=False)
+    schedule_start_hour = Column(Integer, default=22)  # 10 PM
+    schedule_end_hour = Column(Integer, default=6)      # 6 AM
+    schedule_risk_profile = Column(String, default="suave")
+
     # Relaciones
     trades = relationship("Trade", back_populates="owner")
 
