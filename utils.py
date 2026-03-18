@@ -4,6 +4,11 @@
 import json
 import re
 from typing import Any, Optional
+from datetime import datetime, timedelta
+
+def get_colombia_time() -> datetime:
+    """Retorna la fecha y hora actual en la zona horaria de Colombia (UTC-5) como un datetime naive."""
+    return datetime.utcnow() - timedelta(hours=5)
 
 from logger_config import get_logger
 

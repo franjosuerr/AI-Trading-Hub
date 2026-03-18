@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timedelta
 from ..database import Base
+
+def get_colombia_time():
+    return datetime.utcnow() - timedelta(hours=5)
 
 class User(Base):
     __tablename__ = "users"
@@ -21,7 +24,7 @@ class User(Base):
     telegram_chat_id = Column(String, nullable=True)
     
     is_active = Column(Boolean, default=False) # Si el bot de este usuario está corriendo
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_colombia_time)
 
     trades = relationship("Trade", back_populates="owner")
 
@@ -75,7 +78,7 @@ class Trade(Base):
     side = Column(String) # buy / sell
     amount = Column(Float)
     price = Column(Float)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=get_colombia_time)
     order_id = Column(String)
     simulated = Column(Boolean)
     profit = Column(Float, default=0.0) # Para registrar ganancias al cerrar (sell)

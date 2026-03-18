@@ -24,6 +24,7 @@ from indicators import compute_all_indicators
 from utils import (
     SIGNAL_LABEL_ES,
     round_to_precision,
+    get_colombia_time
 )
 from email_notifier import send_trade_email
 
@@ -318,6 +319,46 @@ def _send_telegram_for_user(user, text, tg_logger=None):
         log.warning("Telegram: error inesperado al enviar: %s", str(e)[:150])
         return False
 
+def _send_telegram_document_for_user(user, doc_path: str, tg_logger=None):
+    """Envía un archivo por Telegram usando las credenciales del usuario."""
+    log = tg_logger or logger
+    token = getattr(user, 'telegram_bot_token', None)
+    chat_id = getattr(user, 'telegram_chat_id', None)
+    if not token or not chat_id:
+        log.info("Telegram: sin credenciales para enviar documento.")
+        return False
+    if not os.path.exists(doc_path):
+        log.warning("Telegram: el archivo %s no existe.", doc_path)
+        return False
+        
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    log.info("Telegram: enviando documento %s...", doc_path)
+    try:
+        # Extraemos el nombre base para el archivo enviado
+        filename = os.path.basename(doc_path)
+        with open(doc_path, 'rb') as f:
+            r = requests.post(
+                url, 
+                data={"chat_id": chat_id, "caption": f"📄 Tu archivo de actividad diaria ({filename})"}, 
+                files={"document": f},
+                timeout=30
+            )
+        if r.status_code == 200:
+            log.info("Telegram: documento enviado OK.")
+            return True
+        else:
+            log.warning("Telegram: API devolvió código %s al enviar doc: %s", r.status_code, r.text[:100])
+            return False
+    except requests.exceptions.Timeout:
+        log.warning("Telegram: timeout al enviar documento.")
+        return False
+    except requests.exceptions.ConnectionError:
+        log.warning("Telegram: error de red al enviar documento.")
+        return False
+    except Exception as e:
+        log.warning("Telegram: error inesperado al enviar documento: %s", str(e)[:150])
+        return False
+
 
 # ─── Utilidad: cooldown post-reinicio ───
 
@@ -326,7 +367,7 @@ def _check_recent_trades_cooldown(user_id: int, pair: str, cooldown_minutes: int
     try:
         db = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+            cutoff = get_colombia_time() - timedelta(minutes=cooldown_minutes)
             recent = db.query(Trade).filter(
                 Trade.user_id == user_id,
                 Trade.pair == pair,
@@ -351,7 +392,7 @@ def _check_stop_loss_cooldown(user_id: int, pair: str, cooldown_minutes: int, lo
     try:
         db = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+            cutoff = get_colombia_time() - timedelta(minutes=cooldown_minutes)
             recent_sl = db.query(Trade).filter(
                 Trade.user_id == user_id,
                 Trade.pair == pair,
@@ -439,7 +480,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     use_vwap = getattr(config, "use_vwap_filter", False)
     use_daily = getattr(config, "use_daily_open_filter", False)
 
-    cycle_start = datetime.utcnow().isoformat()
+    cycle_start = get_colombia_time().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
 
     # Balance al inicio
@@ -677,7 +718,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                             max_pnl_pct = ((last_max - avg_entry_price) / avg_entry_price) * 100
                         # Calc time duration
                         if last_trade.timestamp:
-                            delta = datetime.utcnow() - last_trade.timestamp
+                            delta = get_colombia_time() - last_trade.timestamp
                             trade_duration_hours = delta.total_seconds() / 3600.0
                 finally:
                     db.close()
@@ -799,7 +840,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         try:
             db = SessionLocal()
             try:
-                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                today_start = get_colombia_time().replace(hour=0, minute=0, second=0, microsecond=0)
                 trades_today = db.query(Trade).filter(
                     Trade.user_id == user.id,
                     Trade.pair == pair,
@@ -1171,6 +1212,8 @@ class BotManager:
         user_logger.info("Entrando al bucle principal de trading...")
 
         cycle_count = 0
+        last_log_sent_date = None
+
         try:
             while True:
                 cycle_count += 1
@@ -1200,6 +1243,15 @@ class BotManager:
                     await asyncio.to_thread(_send_telegram_for_user, user, f"🚨 Error en ciclo #{cycle_count}: {str(e)[:200]}")
                     await asyncio.sleep(60)
                     continue
+
+                # --- Envío Diario de Logs ---
+                current_time = get_colombia_time()
+                current_date = current_time.date()
+                if current_time.hour == 23 and last_log_sent_date != current_date:
+                    user_logger.info("Hora de cierre (23:00). Enviando log diario a Telegram...")
+                    log_file_path = os.path.join("logs", "bots", f"user_{user_id}.log")
+                    await asyncio.to_thread(_send_telegram_document_for_user, user, log_file_path, user_logger)
+                    last_log_sent_date = current_date
 
                 user_logger.info("Próximo ciclo en %s segundos.", interval)
                 await asyncio.sleep(interval)

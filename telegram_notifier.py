@@ -163,7 +163,7 @@ def notify_cycle_summary(
 
 def notify_critical_error(title: str, detail: str):
     """Notifica un error crítico que puede detener el bot."""
-    from datetime import datetime
-    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    from utils import get_colombia_time
+    ts = get_colombia_time().strftime("%Y-%m-%d %H:%M:%S UTC-5")
     msg = f"🚨 <b>Error crítico</b> [{ts}]\n{title}\n<code>{detail[:500]}</code>"
     send_telegram_message(msg)

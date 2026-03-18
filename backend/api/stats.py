@@ -10,6 +10,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import ccxt
 
+def get_colombia_time():
+    return datetime.utcnow() - timedelta(hours=5)
+
 router = APIRouter(prefix="/stats", tags=["Statistics"])
 
 
@@ -112,7 +115,7 @@ def get_monthly_stats(user_id: int, request: Request, month: str = None, db: Ses
         except ValueError:
             raise HTTPException(status_code=400, detail="Formato de mes inválido. Usa YYYY-MM")
     else:
-        now = datetime.utcnow()
+        now = get_colombia_time()
         year, mon = now.year, now.month
 
     # Inicio y fin del mes
@@ -212,4 +215,137 @@ def get_monthly_stats(user_id: int, request: Request, month: str = None, db: Ses
             {"name": "Ventas", "value": total_sells}
         ],
         "recent_trades": recent_trades
+    }
+
+@router.get("/{user_id}/open_positions")
+def get_open_positions(
+    user_id: int, 
+    request: Request, 
+    page: int = 1, 
+    limit: int = 15, 
+    pair_filter: str = None, 
+    db: Session = Depends(get_db)
+):
+    """
+    Calcula las posiciones abiertas del bot basándose en el historial de BD.
+    Suma las compras, resta las ventas. Si queda saldo > 0.0001, es una posición abierta.
+    """
+    current = get_current_user_from_token(request)
+    if current["role"] != "admin" and int(current["sub"]) != user_id:
+        raise HTTPException(status_code=403, detail="No tienes acceso")
+
+    # Obtener TODO el historial ordenado por antigüedad
+    trades = db.query(Trade).filter(Trade.user_id == user_id).order_by(Trade.timestamp.asc()).all()
+    
+    # Estructura: diccionarios agrupados por moneda
+    # pair -> {"amount": float, "total_cost": float}
+    positions = defaultdict(lambda: {"amount": 0.0, "total_cost": 0.0})
+
+    for t in trades:
+        if t.side == "buy":
+            positions[t.pair]["amount"] += t.amount
+            positions[t.pair]["total_cost"] += (t.amount * t.price)
+        elif t.side == "sell":
+            # Para ventas, restamos el monto. 
+            # También reducimos el total_cost proporcionalmente al amount vendido.
+            prev_amount = positions[t.pair]["amount"]
+            if prev_amount > 0:
+                cost_reduction_ratio = min(t.amount / prev_amount, 1.0)
+                positions[t.pair]["total_cost"] -= (positions[t.pair]["total_cost"] * cost_reduction_ratio)
+            
+            positions[t.pair]["amount"] -= t.amount
+            if positions[t.pair]["amount"] < 0.0001:
+                positions[t.pair]["amount"] = 0.0
+                positions[t.pair]["total_cost"] = 0.0
+
+    # Formatear el resultado filtrando posiciones diminutas (polvo)
+    open_positions = []
+    for pair, data in positions.items():
+        if data["amount"] > 0.0001:
+            avg_entry = data["total_cost"] / data["amount"] if data["amount"] > 0 else 0
+            open_positions.append({
+                "pair": pair,
+                "amount": round(data["amount"], 8),
+                "avg_entry_price": round(avg_entry, 6),
+                "total_invested": round(data["total_cost"], 2)
+            })
+
+    # Filtrar por search si se mandó
+    if pair_filter:
+        pair_lower = pair_filter.lower()
+        open_positions = [p for p in open_positions if pair_lower in p["pair"].lower()]
+
+    # Calcular total atrapado pre-paginación
+    total_invested_trapped = sum(p["total_invested"] for p in open_positions)
+
+    # Ordenar por el que tiene más dinero invertido
+    open_positions.sort(key=lambda x: x["total_invested"], reverse=True)
+    
+    # Paginar
+    total = len(open_positions)
+    start = (page - 1) * limit
+    end = start + limit
+    paginated_positions = open_positions[start:end]
+    
+    return {
+        "data": paginated_positions,
+        "total": total,
+        "total_invested_trapped": round(total_invested_trapped, 2)
+    }
+
+@router.get("/{user_id}/trades/paginated")
+def get_user_trades_paginated(
+    user_id: int, 
+    request: Request, 
+    month: str = None,
+    page: int = 1,
+    limit: int = 20,
+    pair: str = None,
+    side: str = None,
+    db: Session = Depends(get_db)
+):
+    current = get_current_user_from_token(request)
+    if current["role"] != "admin" and int(current["sub"]) != user_id:
+        raise HTTPException(status_code=403, detail="No tienes acceso")
+
+    query = db.query(Trade).filter(Trade.user_id == user_id)
+
+    # Filtro por mes (opcional pero por defecto actúa sobre el actual si se requiere desde UI)
+    if month:
+        try:
+            year, mon = map(int, month.split("-"))
+            start_date = datetime(year, mon, 1)
+            end_date = datetime(year + 1, 1, 1) if mon == 12 else datetime(year, mon + 1, 1)
+            query = query.filter(Trade.timestamp >= start_date, Trade.timestamp < end_date)
+        except ValueError:
+            pass # Si falla o es "all", ignora filtro de fecha
+
+    # Filtros String (Like)
+    if pair:
+        query = query.filter(Trade.pair.ilike(f"%{pair}%"))
+    if side and side != "all":
+        query = query.filter(Trade.side == side)
+
+    # Count Total
+    total = query.count()
+    
+    # Paginación
+    offset = (page - 1) * limit
+    trades = query.order_by(Trade.timestamp.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "data": [
+            {
+                "id": t.id,
+                "pair": t.pair,
+                "side": t.side,
+                "amount": t.amount,
+                "price": t.price,
+                "profit": t.profit,
+                "simulated": t.simulated,
+                "timestamp": t.timestamp.isoformat()
+            }
+            for t in trades
+        ],
+        "total": total
     }

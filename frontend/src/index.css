@@ -302,6 +302,25 @@ select option {
   color: var(--text-main);
 }
 
+/* ─── Modal grids ─── */
+.modal-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.modal-grid-stats {
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  gap: 16px;
+}
+
+.modal-grid-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
 /* ─── Responsive ─── */
 @media (max-width: 768px) {
   .topbar {
@@ -318,5 +337,14 @@ select option {
 
   .topbar-stats {
     display: none;
+  }
+  
+  .modal-grid-2,
+  .modal-grid-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-content {
+    padding: 1rem !important;
   }
 }
