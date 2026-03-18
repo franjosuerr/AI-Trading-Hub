@@ -156,19 +156,44 @@ function UserStatsModal({ userId, userName, onClose }) {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(null);
   const [balanceLoading, setBalanceLoading] = useState(true);
-  const [openPositions, setOpenPositions] = useState([]);
+  const [openPositions, setOpenPositions] = useState({ data: [], total: 0, total_invested_trapped: 0 });
   const [positionsLoading, setPositionsLoading] = useState(false);
+  const [trades_paginated, setTradesPaginated] = useState({ data: [], total: 0 });
+  const [tradesLoading, setTradesLoading] = useState(false);
+  
+  // Pagination & Filter States
+  const [tradesPage, setTradesPage] = useState(1);
+  const [tradesLimit, setTradesLimit] = useState(20);
+  const [tradesPairFilter, setTradesPairFilter] = useState('');
+  const [tradesSideFilter, setTradesSideFilter] = useState('');
+  
+  const [positionsPage, setPositionsPage] = useState(1);
+  const [positionsLimit, setPositionsLimit] = useState(15);
+  const [positionsPairFilter, setPositionsPairFilter] = useState('');
+
   const [activeTab, setActiveTab] = useState('trades'); // 'trades' | 'positions'
   const [currentMonth, setCurrentMonth] = useState(() => {
     const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
     return `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}`;
   });
 
-  useEffect(() => { fetchStats(); }, [currentMonth]);
+  useEffect(() => { 
+    fetchStats(); 
+    fetchTradesPaginated();
+  }, [currentMonth]);
+  
   useEffect(() => { 
     fetchBalance(); 
-    fetchOpenPositions();
   }, []);
+
+  // Fetch paginados cuando cambian sus dependencias
+  useEffect(() => {
+    fetchTradesPaginated();
+  }, [tradesPage, tradesLimit, tradesPairFilter, tradesSideFilter]);
+
+  useEffect(() => {
+    fetchOpenPositions();
+  }, [positionsPage, positionsLimit, positionsPairFilter]);
 
   const fetchBalance = async () => {
     setBalanceLoading(true);
@@ -188,11 +213,33 @@ function UserStatsModal({ userId, userName, onClose }) {
     finally { setLoading(false); }
   };
 
+  const fetchTradesPaginated = async () => {
+    setTradesLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        month: currentMonth,
+        page: tradesPage,
+        limit: tradesLimit,
+      });
+      if (tradesPairFilter) qs.append('pair', tradesPairFilter);
+      if (tradesSideFilter) qs.append('side', tradesSideFilter);
+      
+      const res = await api.get(`/stats/${userId}/trades/paginated?${qs.toString()}`);
+      setTradesPaginated(res.data);
+    } catch (err) { console.error('Error fetching trades:', err); }
+    finally { setTradesLoading(false); }
+  };
+
   const fetchOpenPositions = async () => {
     setPositionsLoading(true);
     try {
-      const res = await api.get(`/stats/${userId}/open_positions`);
-      setOpenPositions(res.data?.open_positions || []);
+      const qs = new URLSearchParams({
+        page: positionsPage,
+        limit: positionsLimit
+      });
+      if (positionsPairFilter) qs.append('pair_filter', positionsPairFilter);
+      const res = await api.get(`/stats/${userId}/open_positions?${qs.toString()}`);
+      setOpenPositions(res.data || { data: [], total: 0, total_invested_trapped: 0 });
     } catch (err) { console.error('Error fetching open positions:', err); }
     finally { setPositionsLoading(false); }
   };
@@ -224,7 +271,7 @@ function UserStatsModal({ userId, userName, onClose }) {
         </div>
 
         {/* ─── Row 1: Saldo + Métricas ─── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '1.5rem' }}>
+        <div className="modal-grid-2" style={{ marginBottom: '1.5rem' }}>
           {/* Saldo CoinEx */}
           <div>
             <h3 style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: '700', marginBottom: '10px', letterSpacing: '1px' }}>SALDO EN COINEX</h3>
@@ -270,7 +317,7 @@ function UserStatsModal({ userId, userName, onClose }) {
             {loading ? (
               <div className="glass-panel" style={{ padding: '20px', textAlign: 'center', color: 'var(--text-dim)' }}>Cargando...</div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+              <div className="modal-grid-metrics">
                 {[
                   { label: 'TRADES', value: s.total_trades || 0, color: '#00f2ff' },
                   { label: 'PROFIT', value: `$${(s.total_profit || 0).toFixed(4)}`, color: (s.total_profit || 0) >= 0 ? '#00ff88' : '#ff5588' },
@@ -295,7 +342,7 @@ function UserStatsModal({ userId, userName, onClose }) {
         {/* ─── Row 2: Charts ─── */}
         {!loading && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '16px', marginBottom: '1.5rem' }}>
+            <div className="modal-grid-stats" style={{ marginBottom: '1.5rem' }}>
               <div className="glass-panel" style={{ padding: '16px' }}>
                 <h3 style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: '700', marginBottom: '12px' }}>PROFIT ACUMULADO</h3>
                 {(stats?.profit_timeline || []).length > 0 ? (
@@ -362,23 +409,47 @@ function UserStatsModal({ userId, userName, onClose }) {
               {/* TAB CONTENT: ÚLTIMOS TRADES */}
               {activeTab === 'trades' && (
                 <>
-                  {(stats?.recent_trades || []).length > 0 ? (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-                        <thead>
-                          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                            <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>FECHA</th>
-                            <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>PAR</th>
-                            <th style={{ textAlign: 'center', padding: '8px', color: 'var(--text-dim)' }}>LADO</th>
-                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>CANTIDAD</th>
-                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PRECIO</th>
-                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PROFIT</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {stats.recent_trades.map((t, i) => (
+                  <div style={{ overflowX: 'auto', paddingBottom: '10px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', minWidth: '600px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                          <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>FECHA</th>
+                          <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <span>PAR</span>
+                              <input 
+                                placeholder="Buscar..." 
+                                value={tradesPairFilter} 
+                                onChange={(e) => { setTradesPage(1); setTradesPairFilter(e.target.value); }}
+                                style={{ padding: '4px', fontSize: '0.7rem', width: '80px', borderRadius: '4px', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'white' }}
+                              />
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'center', padding: '8px', color: 'var(--text-dim)' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+                              <span>LADO</span>
+                              <select 
+                                value={tradesSideFilter} 
+                                onChange={(e) => { setTradesPage(1); setTradesSideFilter(e.target.value); }}
+                                style={{ padding: '4px', fontSize: '0.7rem', width: '70px', borderRadius: '4px', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'white' }}
+                              >
+                                <option value="">Todos</option>
+                                <option value="buy">Compra</option>
+                                <option value="sell">Venta</option>
+                              </select>
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>CANTIDAD</th>
+                          <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PRECIO</th>
+                          <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PROFIT</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tradesLoading ? (<tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>Cargando trades...</td></tr>)
+                        : (trades_paginated.data || []).length > 0 ? (
+                          trades_paginated.data.map((t, i) => (
                             <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                              <td style={{ padding: '8px', color: '#999' }}>{`${t.timestamp.slice(8,10)}/${t.timestamp.slice(5,7)} ${t.timestamp.slice(11,16)}`}</td>
+                              <td style={{ padding: '8px', color: '#999', whiteSpace: 'nowrap' }}>{`${t.timestamp.slice(8,10)}/${t.timestamp.slice(5,7)} ${t.timestamp.slice(11,16)}`}</td>
                               <td style={{ padding: '8px', fontWeight: '600' }}>{t.pair}</td>
                               <td style={{ padding: '8px', textAlign: 'center' }}>
                                 <span style={{ background: t.side === 'buy' ? 'rgba(0,242,255,0.1)' : 'rgba(255,85,136,0.1)', color: t.side === 'buy' ? '#00f2ff' : '#ff5588', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '700' }}>
@@ -389,58 +460,106 @@ function UserStatsModal({ userId, userName, onClose }) {
                               <td style={{ padding: '8px', textAlign: 'right' }}>${t.price}</td>
                               <td style={{ padding: '8px', textAlign: 'right', color: t.profit >= 0 ? '#00ff88' : '#ff5588', fontWeight: '600' }}>${t.profit.toFixed(4)}</td>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          ))
+                        ) : (
+                          <tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>No hay trades con estos filtros.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  {/* Pagination Controls */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                      Mostrando {trades_paginated.data.length} de {trades_paginated.total} totales
                     </div>
-                  ) : (
-                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>No hay trades recientes para mostrar.</div>
-                  )}
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <button 
+                        onClick={() => setTradesPage(p => Math.max(1, p - 1))} 
+                        disabled={tradesPage === 1}
+                        className="btn-action" style={{ padding: '4px 12px', opacity: tradesPage === 1 ? 0.5 : 1 }}
+                      >Anterior</button>
+                      <span style={{ fontSize: '0.8rem', fontWeight: '700', padding: '0 8px' }}>Pág {tradesPage}</span>
+                      <button 
+                        onClick={() => setTradesPage(p => p + 1)} 
+                        disabled={tradesPage * tradesLimit >= trades_paginated.total}
+                        className="btn-action" style={{ padding: '4px 12px', opacity: tradesPage * tradesLimit >= trades_paginated.total ? 0.5 : 1 }}
+                      >Siguiente</button>
+                    </div>
+                  </div>
                 </>
               )}
 
               {/* TAB CONTENT: COMPRAS PENDIENTES */}
               {activeTab === 'positions' && (
                 <>
-                  {positionsLoading ? (
-                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>Cargando posiciones...</div>
-                  ) : openPositions.length > 0 ? (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-                        <thead>
-                          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                            <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>PAR / ACTIVO</th>
-                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>CANTIDAD PENDIENTE</th>
-                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PRECIO ENT. PROMEDIO</th>
-                            <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>USDT TOTAL INVERTIDO</th>
+                  <div style={{ overflowX: 'auto', paddingBottom: '10px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', minWidth: '600px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                          <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-dim)' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <span>PAR / ACTIVO</span>
+                              <input 
+                                placeholder="Filtrar par..." 
+                                value={positionsPairFilter} 
+                                onChange={(e) => { setPositionsPage(1); setPositionsPairFilter(e.target.value); }}
+                                style={{ padding: '4px', fontSize: '0.7rem', width: '100px', borderRadius: '4px', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'white' }}
+                              />
+                            </div>
+                          </th>
+                          <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>CANTIDAD PENDIENTE</th>
+                          <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>PRECIO ENT. PROMEDIO</th>
+                          <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-dim)' }}>USDT TOTAL INVERTIDO</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {positionsLoading ? (<tr><td colSpan="4" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>Cargando posiciones...</td></tr>)
+                        : (openPositions.data || []).length > 0 ? (
+                          (openPositions.data || []).map((p, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td style={{ padding: '8px', fontWeight: '700', color: '#fff', whiteSpace: 'nowrap' }}>{p.pair} <span style={{ fontSize: '0.65rem', background: 'rgba(255,170,0,0.1)', color: '#ffaa00', padding: '2px 5px', borderRadius: '3px', marginLeft: '6px' }}>PENDIENTE</span></td>
+                            <td style={{ padding: '8px', textAlign: 'right', color: '#00f2ff' }}>{p.amount}</td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>${p.avg_entry_price}</td>
+                            <td style={{ padding: '8px', textAlign: 'right', fontWeight: '900', color: '#00ff88' }}>${p.total_invested.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {openPositions.map((p, i) => (
-                            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                              <td style={{ padding: '8px', fontWeight: '700', color: '#fff' }}>{p.pair} <span style={{ fontSize: '0.65rem', background: 'rgba(255,170,0,0.1)', color: '#ffaa00', padding: '2px 5px', borderRadius: '3px', marginLeft: '6px' }}>PENDIENTE</span></td>
-                              <td style={{ padding: '8px', textAlign: 'right', color: '#00f2ff' }}>{p.amount}</td>
-                              <td style={{ padding: '8px', textAlign: 'right' }}>${p.avg_entry_price}</td>
-                              <td style={{ padding: '8px', textAlign: 'right', fontWeight: '900', color: '#00ff88' }}>${p.total_invested} USDT</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
+                        ))) : (
                           <tr>
-                            <td colSpan="3" style={{ padding: '12px 8px', textAlign: 'right', color: 'var(--text-dim)', fontWeight: '700', fontSize: '0.9rem' }}>TOTAL INVERTIDO ATRAPADO:</td>
-                            <td style={{ padding: '12px 8px', textAlign: 'right', color: '#ffaa00', fontWeight: '900', fontSize: '1rem' }}>
-                              ${openPositions.reduce((acc, crr) => acc + crr.total_invested, 0).toLocaleString('en-US', {minimumFractionDigits:2})}
+                            <td colSpan="4" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>
+                              <Shield size={32} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
+                              <p>Excelente, no tienes compras atrapadas en estos filtros.</p>
                             </td>
                           </tr>
-                        </tfoot>
-                      </table>
+                        )}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan="3" style={{ padding: '12px 8px', textAlign: 'right', color: 'var(--text-dim)', fontWeight: '700', fontSize: '0.9rem' }}>TOTAL INVERTIDO ATRAPADO:</td>
+                          <td style={{ padding: '12px 8px', textAlign: 'right', color: '#ffaa00', fontWeight: '900', fontSize: '1rem' }}>
+                            ${(openPositions.total_invested_trapped || 0).toLocaleString('en-US', {minimumFractionDigits:2})}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  {/* Pagination Controls */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                      Mostrando {(openPositions.data || []).length} de {openPositions.total || 0} totales
                     </div>
-                  ) : (
-                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>
-                      <Shield size={32} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
-                      <p>Excelente, no tienes compras atrapadas. Todo está en USDT.</p>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <button 
+                        onClick={() => setPositionsPage(p => Math.max(1, p - 1))} 
+                        disabled={positionsPage === 1}
+                        className="btn-action" style={{ padding: '4px 12px', opacity: positionsPage === 1 ? 0.5 : 1 }}
+                      >Anterior</button>
+                      <span style={{ fontSize: '0.8rem', fontWeight: '700', padding: '0 8px' }}>Pág {positionsPage}</span>
+                      <button 
+                        onClick={() => setPositionsPage(p => p + 1)} 
+                        disabled={positionsPage * positionsLimit >= (openPositions.total || 0)}
+                        className="btn-action" style={{ padding: '4px 12px', opacity: positionsPage * positionsLimit >= (openPositions.total || 0) ? 0.5 : 1 }}
+                      >Siguiente</button>
                     </div>
-                  )}
+                  </div>
                 </>
               )}
             </div>
