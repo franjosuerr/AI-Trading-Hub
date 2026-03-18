@@ -21,13 +21,9 @@ def _hash_password(password: str) -> str:
 def _user_with_profit(user, db):
     """Agrega total_profit al dict del usuario."""
     profit = db.query(func.sum(Trade.profit)).filter(Trade.user_id == user.id).scalar() or 0.0
-    return {
-        "id": user.id, "username": user.username, "email": user.email,
-        "coinex_api_key": user.coinex_api_key, "coinex_secret": user.coinex_secret,
-        "telegram_bot_token": user.telegram_bot_token, "telegram_chat_id": user.telegram_chat_id,
-        "is_active": user.is_active, "role": user.role,
-        "total_profit": round(float(profit), 4)
-    }
+    user_dict = {k: v for k, v in user.__dict__.items() if not k.startswith('_')}
+    user_dict["total_profit"] = round(float(profit), 4)
+    return user_dict
 
 
 @router.post("/", response_model=UserResponse)
@@ -43,15 +39,12 @@ def create_user(user: UserCreate, request: Request, db: Session = Depends(get_db
     if db.query(User).filter(User.email == user.email).first():
         raise HTTPException(status_code=400, detail="Email ya registrado")
     
+    # Construir usuario con configs por defecto o desde payload
+    user_data = user.dict(exclude={"password"})
     new_user = User(
-        username=user.username,
-        email=user.email,
         hashed_password=_hash_password(user.password),
-        role="user",  # Los nuevos usuarios siempre son "user"
-        coinex_api_key=user.coinex_api_key,
-        coinex_secret=user.coinex_secret,
-        telegram_bot_token=user.telegram_bot_token,
-        telegram_chat_id=user.telegram_chat_id
+        role="user",
+        **user_data
     )
     db.add(new_user)
     db.commit()

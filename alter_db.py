@@ -1,20 +1,25 @@
 import sqlite3
 
 def alter_db():
+    """Agrega columnas de configuración a la tabla users (migración legacy)."""
     conn = sqlite3.connect('data/trading_bot.db')
     cursor = conn.cursor()
 
-    try:
-        cursor.execute('ALTER TABLE global_config ADD COLUMN max_exposure_percent FLOAT DEFAULT 80.0')
-        print("Added max_exposure_percent")
-    except sqlite3.OperationalError as e:
-        print("max_exposure_percent might exist:", e)
+    columns = [
+        ("max_exposure_percent", "FLOAT DEFAULT 80.0"),
+        ("cooldown_minutes", "INTEGER DEFAULT 120"),
+        ("invest_percentage_ranging", "FLOAT DEFAULT 15.0"),
+        ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
+        ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
+        ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
+    ]
 
-    try:
-        cursor.execute('ALTER TABLE global_config ADD COLUMN cooldown_minutes INTEGER DEFAULT 120')
-        print("Added cooldown_minutes")
-    except sqlite3.OperationalError as e:
-        print("cooldown_minutes might exist:", e)
+    for col_name, col_def in columns:
+        try:
+            cursor.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_def}')
+            print(f"Added {col_name}")
+        except sqlite3.OperationalError as e:
+            print(f"{col_name} might exist: {e}")
 
     conn.commit()
     conn.close()

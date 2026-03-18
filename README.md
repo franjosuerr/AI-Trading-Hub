@@ -115,7 +115,7 @@ Desde el dashboard puedes:
 │   ├── logger_config.py     # Sistema de logging multi-archivo
 │   ├── schemas.py           # Pydantic schemas
 │   ├── models/
-│   │   └── models.py        # User, GlobalConfig, Trade
+│   │   └── models.py        # User, Trade
 │   └── api/
 │       ├── auth.py          # Login JWT + middleware de autenticación
 │       ├── users.py         # CRUD usuarios + reinicio de bot

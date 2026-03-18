@@ -26,20 +26,16 @@ class User(Base):
     is_active = Column(Boolean, default=False) # Si el bot de este usuario está corriendo
     created_at = Column(DateTime, default=get_colombia_time)
 
-    trades = relationship("Trade", back_populates="owner")
-
-class GlobalConfig(Base):
-    __tablename__ = "global_config"
-
-    id = Column(Integer, primary_key=True, index=True)
-    
+    # ------------------
+    # Configuraciones Individuales del Bot
+    # ------------------
     timeframe = Column(String, default="15m")
     interval = Column(Integer, default=300)
-    test_mode = Column(Boolean, default=False)
+    test_mode = Column(Boolean, default=True)
     pairs = Column(String, default="SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT")
     
     # Parámetros de trading
-    candle_count = Column(Integer, default=210)
+    candle_count = Column(Integer, default=350)
     stop_loss_percent = Column(Float, default=3.0)
     max_trades_per_day = Column(Integer, default=5)
     pair_delay = Column(Integer, default=2)
@@ -52,22 +48,29 @@ class GlobalConfig(Base):
     adx_period = Column(Integer, default=14)
     adx_threshold = Column(Integer, default=25)
     invest_percentage = Column(Float, default=25.0)
-    invest_percentage_ranging = Column(Float, default=15.0)  # % para estrategia de rango (mean reversion)
+    invest_percentage_ranging = Column(Float, default=15.0)
     
     # Parámetros Pro
-    trailing_stop_activation = Column(Float, default=1.5)  # % de profit a partir del cual se prende el trailing stop
-    trailing_stop_distance = Column(Float, default=0.5)    # % de distancia del máximo para vender
-    macro_timeframe = Column(String, default="1h")         # Temporalidad para filtrado macro
+    trailing_stop_activation = Column(Float, default=1.5)
+    trailing_stop_distance = Column(Float, default=0.5)
+    macro_timeframe = Column(String, default="1h")
     
-    # Logs
+    # Logs / Status
     log_level = Column(String, default="INFO")
-    
-    # Perfil de Riesgo (suave, conservador, agresivo, muy_agresivo)
     risk_profile = Column(String, default="conservador")
 
     # Day Trading Intraday Filters
-    use_vwap_filter = Column(Boolean, default=False)
+    use_vwap_filter = Column(Boolean, default=True)
     use_daily_open_filter = Column(Boolean, default=False)
+
+    # Horario Nocturno / Schedule
+    schedule_enabled = Column(Boolean, default=False)
+    schedule_start_hour = Column(Integer, default=22)  # 10 PM
+    schedule_end_hour = Column(Integer, default=6)      # 6 AM
+    schedule_risk_profile = Column(String, default="suave")
+
+    # Relaciones
+    trades = relationship("Trade", back_populates="owner")
 
 class Trade(Base):
     __tablename__ = "trades"
