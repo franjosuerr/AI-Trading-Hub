@@ -113,8 +113,10 @@ function LoginScreen({ onLogin }) {
       localStorage.setItem('auth_role', res.data.role);
       localStorage.setItem('auth_user_id', res.data.user_id);
       localStorage.setItem('auth_username', res.data.username);
+      logger.info('Login exitoso', { username: res.data.username, role: res.data.role });
       onLogin(res.data);
     } catch (err) {
+      logger.warn('Login fallido', { email, error: err.response?.data?.detail });
       setError(err.response?.data?.detail || 'Error de conexión');
     } finally { setLoading(false); }
   };
@@ -612,8 +614,9 @@ function Dashboard({ userRole, userId, username, onLogout }) {
   };
 
   const toggleBot = async (uid, isActive) => {
-    try { await api.post(`/bot/${uid}/${isActive ? 'stop' : 'start'}`); fetchData(); }
-    catch (error) { alert(error.response?.data?.detail || "Error al controlar el bot"); }
+    const action = isActive ? 'stop' : 'start';
+    try { await api.post(`/bot/${uid}/${action}`); logger.info(`Bot ${action}`, { user_id: uid }); fetchData(); }
+    catch (error) { logger.error(`Error al ${action} bot`, { user_id: uid, error: error.response?.data?.detail }); alert(error.response?.data?.detail || "Error al controlar el bot"); }
   };
 
   const handleOpenModal = (user = null) => {
@@ -645,8 +648,8 @@ function Dashboard({ userRole, userId, username, onLogout }) {
 
   const handleDelete = async (uid) => {
     if (window.confirm("¿Estás seguro de eliminar este usuario?")) {
-      try { await api.delete(`/users/${uid}`); fetchData(); }
-      catch (error) { alert(error.response?.data?.detail || "Error al eliminar"); }
+      try { await api.delete(`/users/${uid}`); logger.info('Usuario eliminado', { user_id: uid }); fetchData(); }
+      catch (error) { logger.error('Error al eliminar usuario', { user_id: uid, error: error.response?.data?.detail }); alert(error.response?.data?.detail || "Error al eliminar"); }
     }
   };
 
@@ -660,10 +663,11 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     e.preventDefault();
     try { 
       await api.put(`/users/${currentUser.id}`, configData); 
+      logger.info('Config guardada', { user_id: currentUser.id, risk_profile: configData.risk_profile });
       setIsConfigModalOpen(false); 
       fetchData(); 
     }
-    catch (error) { alert(error.response?.data?.detail || "Error al guardar configuración"); }
+    catch (error) { logger.error('Error al guardar config', { user_id: currentUser.id, error: error.response?.data?.detail }); alert(error.response?.data?.detail || "Error al guardar configuración"); }
   };
 
   const handleRiskChange = (e) => {
