@@ -35,7 +35,7 @@ class User(Base):
     pairs = Column(String, default="SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT")
     
     # Parámetros de trading
-    candle_count = Column(Integer, default=210)
+    candle_count = Column(Integer, default=350)
     stop_loss_percent = Column(Float, default=3.0)
     max_trades_per_day = Column(Integer, default=5)
     pair_delay = Column(Integer, default=2)

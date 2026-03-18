@@ -460,7 +460,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
 
     test_mode = config.test_mode if config.test_mode is not None else True
     timeframe = config.timeframe or "15m"
-    candle_count = config.candle_count or 210
+    candle_count = config.candle_count or 350
     stop_loss = config.stop_loss_percent or 3.0
     pair_delay = config.pair_delay or 2
     max_trades = config.max_trades_per_day or 10

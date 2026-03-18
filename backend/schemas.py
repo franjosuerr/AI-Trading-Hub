@@ -15,7 +15,7 @@ class UserBase(BaseModel):
     interval: int = 300
     test_mode: bool = False
     pairs: str = "SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT"
-    candle_count: int = 210
+    candle_count: int = 350
     stop_loss_percent: float = 3.0
     max_trades_per_day: int = 5
     pair_delay: int = 2

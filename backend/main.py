@@ -35,7 +35,7 @@ def auto_migrate_db():
         ("interval", "INTEGER DEFAULT 300"),
         ("test_mode", "BOOLEAN DEFAULT 0"),
         ("pairs", "VARCHAR DEFAULT 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT'"),
-        ("candle_count", "INTEGER DEFAULT 210"),
+        ("candle_count", "INTEGER DEFAULT 350"),
         ("stop_loss_percent", "FLOAT DEFAULT 3.0"),
         ("max_trades_per_day", "INTEGER DEFAULT 5"),
         ("pair_delay", "INTEGER DEFAULT 2"),
