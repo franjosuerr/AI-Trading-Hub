@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from .database import engine, get_db, Base
-from .models import User, GlobalConfig, Trade
+from .models import User, Trade
 from .logger_config import setup_backend_logging, get_logger, cleanup_old_logs
 from .api.auth import auth_middleware
 import asyncio
@@ -19,81 +19,59 @@ logger.info("Iniciando aplicación FastAPI...")
 
 # ─── Migración Automática de Base de Datos ───
 def auto_migrate_db():
+    """Migra columnas de configuración al modelo User (antes estaban en global_config)."""
     import sqlite3
     db_path = os.getenv("DATABASE_URL", "sqlite:///./data/trading_bot.db").replace("sqlite:///", "")
-    if os.path.exists(db_path):
-        logger.info("Ejecutando migraciones automáticas de base de datos...")
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
+    if not os.path.exists(db_path):
+        return
+
+    logger.info("Ejecutando migraciones automáticas de base de datos...")
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Columnas de configuración que ahora viven en la tabla users
+    user_columns = [
+        ("timeframe", "VARCHAR DEFAULT '15m'"),
+        ("interval", "INTEGER DEFAULT 300"),
+        ("test_mode", "BOOLEAN DEFAULT 0"),
+        ("pairs", "VARCHAR DEFAULT 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT'"),
+        ("candle_count", "INTEGER DEFAULT 210"),
+        ("stop_loss_percent", "FLOAT DEFAULT 3.0"),
+        ("max_trades_per_day", "INTEGER DEFAULT 5"),
+        ("pair_delay", "INTEGER DEFAULT 2"),
+        ("max_exposure_percent", "FLOAT DEFAULT 80.0"),
+        ("cooldown_minutes", "INTEGER DEFAULT 120"),
+        ("ema_fast", "INTEGER DEFAULT 7"),
+        ("ema_slow", "INTEGER DEFAULT 30"),
+        ("adx_period", "INTEGER DEFAULT 14"),
+        ("adx_threshold", "INTEGER DEFAULT 25"),
+        ("invest_percentage", "FLOAT DEFAULT 25.0"),
+        ("invest_percentage_ranging", "FLOAT DEFAULT 15.0"),
+        ("trailing_stop_activation", "FLOAT DEFAULT 1.5"),
+        ("trailing_stop_distance", "FLOAT DEFAULT 0.5"),
+        ("macro_timeframe", "VARCHAR DEFAULT '1h'"),
+        ("log_level", "VARCHAR DEFAULT 'INFO'"),
+        ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
+        ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
+        ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
+    ]
+
+    for col_name, col_def in user_columns:
         try:
-            cursor.execute('ALTER TABLE global_config ADD COLUMN max_exposure_percent FLOAT DEFAULT 80.0')
-            logger.info("Columna 'max_exposure_percent' agregada.")
+            cursor.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_def}')
+            logger.info("Columna '%s' agregada a users.", col_name)
         except sqlite3.OperationalError:
-            pass # Ya existe
-        
-        # Corregir valor legacy: 10% bloqueaba compras con invest_percentage=75%
-        try:
-            cursor.execute('UPDATE global_config SET max_exposure_percent = 80.0 WHERE max_exposure_percent = 10.0')
-            if cursor.rowcount > 0:
-                logger.info("max_exposure_percent actualizado de 10.0 a 80.0 (%d registro(s)).", cursor.rowcount)
-        except Exception:
-            pass
-            
-        try:
-            cursor.execute('ALTER TABLE global_config ADD COLUMN cooldown_minutes INTEGER DEFAULT 120')
-            logger.info("Columna 'cooldown_minutes' agregada.")
-        except sqlite3.OperationalError:
-            pass # Ya existe
-        
-        # Migración: columna invest_percentage_ranging para estrategia de rango
-        try:
-            cursor.execute('ALTER TABLE global_config ADD COLUMN invest_percentage_ranging FLOAT DEFAULT 15.0')
-            logger.info("Columna 'invest_percentage_ranging' agregada.")
-        except sqlite3.OperationalError:
-            pass # Ya existe
-        
-        # Migración: actualizar pares para incluir BTC y XRP
-        try:
-            cursor.execute("UPDATE global_config SET pairs = 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT' WHERE pairs = 'SOL/USDT,ETH/USDT'")
-            if cursor.rowcount > 0:
-                logger.info("Pares actualizados: añadidos BTC/USDT y XRP/USDT.")
-        except Exception:
-            pass
-            
-        # Migración: Perfil de Riesgo
-        try:
-            cursor.execute("ALTER TABLE global_config ADD COLUMN risk_profile VARCHAR DEFAULT 'conservador'")
-            logger.info("Columna 'risk_profile' agregada.")
-        except sqlite3.OperationalError:
-            pass # Ya existe
-            
-        # Migración: Intraday Filters
-        try:
-            cursor.execute('ALTER TABLE global_config ADD COLUMN use_vwap_filter BOOLEAN DEFAULT 0')
-            cursor.execute('ALTER TABLE global_config ADD COLUMN use_daily_open_filter BOOLEAN DEFAULT 0')
-            logger.info("Columnas 'use_vwap_filter' y 'use_daily_open_filter' agregadas.")
-        except sqlite3.OperationalError:
-            pass # Ya existen
-        
-        # Migración: ajustar invest_percentage de 75% a 25% (position sizing conservador)
-        try:
-            cursor.execute('UPDATE global_config SET invest_percentage = 25.0 WHERE invest_percentage = 75.0')
-            if cursor.rowcount > 0:
-                logger.info("invest_percentage ajustado de 75%% a 25%% (position sizing profesional).")
-        except Exception:
-            pass
-        
-        # Migración: ajustar stop_loss de 2% a 3%
-        try:
-            cursor.execute('UPDATE global_config SET stop_loss_percent = 3.0 WHERE stop_loss_percent = 2.0')
-            if cursor.rowcount > 0:
-                logger.info("stop_loss_percent ajustado de 2%% a 3%%.")
-        except Exception:
-            pass
-            
-        conn.commit()
-        conn.close()
+            pass  # Ya existe
+
+    # Eliminar tabla global_config legacy si existe
+    try:
+        cursor.execute('DROP TABLE IF EXISTS global_config')
+        logger.info("Tabla legacy 'global_config' eliminada.")
+    except Exception:
+        pass
+
+    conn.commit()
+    conn.close()
 
 auto_migrate_db()
 
@@ -164,10 +142,9 @@ def health_check():
     return {"status": "healthy"}
 
 # Incluir routers API
-from .api import users, config, control, stats, logs, auth
+from .api import users, control, stats, logs, auth
 app.include_router(auth.router)
 app.include_router(users.router)
-app.include_router(config.router)
 app.include_router(control.router)
 app.include_router(stats.router)
 app.include_router(logs.router)

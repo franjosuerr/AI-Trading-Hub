@@ -1,1 +1,1 @@
-from .models import User, GlobalConfig, Trade
+from .models import User, Trade

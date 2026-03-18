@@ -30,7 +30,7 @@ from email_notifier import send_trade_email
 
 # Backend
 from backend.database import SessionLocal
-from backend.models.models import User, GlobalConfig, Trade
+from backend.models.models import User, Trade
 from backend.logger_config import get_logger, get_user_bot_logger
 
 logger = get_logger("bot_manager")
@@ -1129,10 +1129,11 @@ class BotManager:
         db = SessionLocal()
         try:
             user = db.query(User).filter(User.id == user_id).first()
-            config = db.query(GlobalConfig).first()
-            if not user or not config:
-                logger.error(f"Configuración no encontrada para usuario {user_id}. Abortando.")
+            if not user:
+                logger.error(f"Usuario no encontrado {user_id}. Abortando.")
                 return
+            config = user
+            
             # Materializar datos antes de cerrar sesión
             username = user.username
             _user_api_key = user.coinex_api_key
@@ -1222,12 +1223,12 @@ class BotManager:
                 db = SessionLocal()
                 try:
                     user = db.query(User).filter(User.id == user_id).first()
-                    config = db.query(GlobalConfig).first()
+                    config = user
                 finally:
                     db.close()
 
-                if not user or not config:
-                    user_logger.error("Configuración no encontrada. Cerrando bucle.")
+                if not user:
+                    user_logger.error("Usuario/Configuración no encontrada. Cerrando bucle.")
                     break
 
                 # Actualizar parámetros dinámicos

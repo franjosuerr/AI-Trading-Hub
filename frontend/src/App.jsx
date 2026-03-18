@@ -588,14 +588,11 @@ function Dashboard({ userRole, userId, username, onLogout }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [formData, setFormData] = useState({ username: '', email: '', coinex_api_key: '', coinex_secret: '', telegram_bot_token: '', telegram_chat_id: '', password: '' });
-  const [globalConfig, setGlobalConfig] = useState({
-    interval: 300, test_mode: false,
-    pairs: 'SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT', timeframe: '15m', candle_count: 350,
-    pair_delay: 2, max_trades_per_day: 10, stop_loss_percent: 3.0, max_exposure_percent: 80.0, cooldown_minutes: 120, log_level: 'INFO',
-    ema_fast: 7, ema_slow: 30, adx_period: 14, adx_threshold: 25, invest_percentage: 25.0, invest_percentage_ranging: 15.0, risk_profile: 'suave',
-    use_vwap_filter: true, use_daily_open_filter: false
-  });
-  const [isGlobalModalOpen, setIsGlobalModalOpen] = useState(false);
+  
+  // Bot Config State
+  const [configData, setConfigData] = useState({});
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  
   const [statsUserId, setStatsUserId] = useState(null);
   const [statsUserName, setStatsUserName] = useState('');
 
@@ -603,25 +600,13 @@ function Dashboard({ userRole, userId, username, onLogout }) {
 
   const fetchData = async () => {
     try {
-      const [usersRes, statsRes, configRes] = await Promise.all([
-        api.get('/users/'), api.get('/stats/summary'), api.get('/config/')
+      const [usersRes, statsRes] = await Promise.all([
+        api.get('/users/'), api.get('/stats/summary')
       ]);
 
-      // Update users list and stats
       setStats(statsRes.data);
-
-      // Only update the form states if the modals are NOT currently open
-      setUsers(prev => {
-        if (!isModalOpen) return usersRes.data;
-        // If the user modal is open, we update the main list but we shouldn't wipe their editing form
-        // (form is separate state anyway, but just in case, updating users is safe)
-        return usersRes.data;
-      });
-
-      setGlobalConfig(prev => {
-        if (!isGlobalModalOpen) return configRes.data;
-        return prev;
-      });
+      setUsers(prev => isModalOpen || isConfigModalOpen ? prev : usersRes.data);
+      setLoading(false);
       setLoading(false);
     } catch (error) { logger.error("Error al obtener datos", { error: error.message }); }
   };
@@ -665,9 +650,19 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     }
   };
 
-  const handleSaveGlobal = async (e) => {
+  const handleOpenConfigModal = (user) => {
+    setCurrentUser(user);
+    setConfigData({ ...user });
+    setIsConfigModalOpen(true);
+  };
+
+  const handleSaveConfig = async (e) => {
     e.preventDefault();
-    try { await api.post('/config/', globalConfig); setIsGlobalModalOpen(false); fetchData(); }
+    try { 
+      await api.put(`/users/${currentUser.id}`, configData); 
+      setIsConfigModalOpen(false); 
+      fetchData(); 
+    }
     catch (error) { alert(error.response?.data?.detail || "Error al guardar configuración"); }
   };
 
@@ -675,7 +670,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     const profile = e.target.value;
     let overrides = { risk_profile: profile };
     if (profile === 'suave') {
-      overrides = { ...overrides, invest_percentage: 10.0, invest_percentage_ranging: 5.0, ema_fast: 12, ema_slow: 26, stop_loss_percent: 2.0, trailing_stop_activation: 1.5, trailing_stop_distance: 0.5 };
+      overrides = { ...overrides, invest_percentage: 10.0, invest_percentage_ranging: 5.0, ema_fast: 12, ema_slow: 26, stop_loss_percent: 2.0, trailing_stop_activation: 1.0, trailing_stop_distance: 0.3 };
     } else if (profile === 'conservador') {
       overrides = { ...overrides, invest_percentage: 25.0, invest_percentage_ranging: 15.0, ema_fast: 7, ema_slow: 30, stop_loss_percent: 3.0, trailing_stop_activation: 1.5, trailing_stop_distance: 0.5 };
     } else if (profile === 'agresivo') {
@@ -683,7 +678,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     } else if (profile === 'muy_agresivo') {
       overrides = { ...overrides, invest_percentage: 90.0, invest_percentage_ranging: 50.0, ema_fast: 3, ema_slow: 10, stop_loss_percent: 6.0, trailing_stop_activation: 3.0, trailing_stop_distance: 1.5 };
     }
-    setGlobalConfig({ ...globalConfig, ...overrides });
+    setConfigData({ ...configData, ...overrides });
   };
 
   const downloadLog = async (uid, uname) => {
@@ -721,9 +716,6 @@ function Dashboard({ userRole, userId, username, onLogout }) {
           </div>
         )}
         <div className="topbar-actions">
-          {isAdmin && (
-            <button onClick={() => setIsGlobalModalOpen(true)} className="btn-action"><Settings size={15} /> Config Global</button>
-          )}
           <button onClick={onLogout} className="btn-action" style={{ color: '#ff5588', borderColor: 'rgba(255,0,85,0.2)' }}><LogOut size={15} /> Salir</button>
         </div>
       </nav>
@@ -743,48 +735,66 @@ function Dashboard({ userRole, userId, username, onLogout }) {
 
         <section className="grid grid-users">
           {users.map((user) => (
-            <div key={user.id} className="card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.2rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div style={{ background: user.is_active ? 'rgba(0,255,136,0.1)' : 'rgba(112,0,255,0.08)', padding: '10px', borderRadius: '12px', color: user.is_active ? '#00ff88' : '#7000ff' }}>
-                    <Bot size={22} />
-                  </div>
-                  <div>
-                    <h3 style={{ fontSize: '1.15rem', fontWeight: '700' }}>{user.username}</h3>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-                      <span className={`status-badge ${user.is_active ? 'status-active' : 'status-inactive'}`}>{user.is_active ? 'ACTIVO' : 'DETENIDO'}</span>
-                      {user.role === 'admin' && <span style={{ fontSize: '0.55rem', background: 'rgba(0,255,136,0.08)', color: '#00ff88', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>ADMIN</span>}
-                    </div>
-                    <div style={{ marginTop: '6px', fontSize: '0.8rem', fontWeight: '700', color: (user.total_profit || 0) >= 0 ? '#00ff88' : '#ff5588' }}>
-                      Profit: ${(user.total_profit || 0).toFixed(4)}
-                    </div>
+            <div key={user.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+
+              {/* ── Header: icono + nombre + toggle ── */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                <div style={{ flexShrink: 0, background: user.is_active ? 'rgba(0,255,136,0.1)' : 'rgba(112,0,255,0.08)', padding: '10px', borderRadius: '12px', color: user.is_active ? '#00ff88' : '#7000ff' }}>
+                  <Bot size={20} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.username}</h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                    <span className={`status-badge ${user.is_active ? 'status-active' : 'status-inactive'}`}>{user.is_active ? 'ACTIVO' : 'DETENIDO'}</span>
+                    {user.role === 'admin' && <span style={{ fontSize: '0.55rem', background: 'rgba(0,255,136,0.08)', color: '#00ff88', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>ADMIN</span>}
                   </div>
                 </div>
-                <button onClick={() => toggleBot(user.id, user.is_active)} style={{ background: user.is_active ? 'rgba(255,0,85,0.08)' : 'rgba(0,255,136,0.08)', color: user.is_active ? '#ff0055' : '#00ff88', border: 'none', padding: '11px', borderRadius: '50%', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {user.is_active ? <Square size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+                <button onClick={() => toggleBot(user.id, user.is_active)} style={{ flexShrink: 0, background: user.is_active ? 'rgba(255,0,85,0.08)' : 'rgba(0,255,136,0.08)', color: user.is_active ? '#ff0055' : '#00ff88', border: 'none', padding: '10px', borderRadius: '50%', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {user.is_active ? <Square size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
                 </button>
               </div>
 
-              <div style={{ background: 'rgba(255,255,255,0.02)', padding: '14px 16px', borderRadius: '12px', marginBottom: '1.2rem', fontSize: '0.82rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ color: 'var(--text-dim)' }}>CoinEx API</span>
-                  <span style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{user.coinex_api_key ? '••••' + user.coinex_api_key.slice(-4) : <em style={{ color: 'var(--text-dim)' }}>sin configurar</em>}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ color: 'var(--text-dim)' }}>Telegram</span>
-                  <span>{user.telegram_chat_id || <em style={{ color: 'var(--text-dim)' }}>sin configurar</em>}</span>
-                </div>
-                {isAdmin && <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-dim)' }}>Email</span>
-                  <span style={{ fontSize: '0.8rem' }}>{user.email || '—'}</span>
-                </div>}
+              {/* ── Profit ── */}
+              <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '10px', padding: '10px 14px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: '600', letterSpacing: '0.5px' }}>PROFIT</span>
+                <span style={{ fontSize: '1rem', fontWeight: '800', color: (user.total_profit || 0) >= 0 ? '#00ff88' : '#ff5588' }}>
+                  ${(user.total_profit || 0).toFixed(4)}
+                </span>
               </div>
 
+              {/* ── Info ── */}
+              <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.78rem', display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}>CoinEx API</span>
+                  <span style={{ fontFamily: 'monospace', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {user.coinex_api_key ? '••••' + user.coinex_api_key.slice(-4) : <em style={{ color: 'var(--text-dim)' }}>sin configurar</em>}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}>Telegram</span>
+                  <span style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {user.telegram_chat_id || <em style={{ color: 'var(--text-dim)' }}>sin configurar</em>}
+                  </span>
+                </div>
+                {isAdmin && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}>Email</span>
+                    <span style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.email || '—'}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Botones fila 1 ── */}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                <button onClick={() => { setStatsUserId(user.id); setStatsUserName(user.username); }} className="btn-action" style={{ flex: 1, color: '#00f2ff', borderColor: 'rgba(0,242,255,0.15)', justifyContent: 'center' }}><BarChart3 size={14} /> Stats</button>
+                <button onClick={() => downloadLog(user.id, user.username)} className="btn-action" style={{ flex: 1, color: '#ffaa00', borderColor: 'rgba(255,170,0,0.15)', justifyContent: 'center' }}><Download size={14} /> Logs</button>
+                <button onClick={() => handleOpenConfigModal(user)} className="btn-action" style={{ flex: 1, color: '#9d00ff', borderColor: 'rgba(157,0,255,0.15)', justifyContent: 'center' }}><Settings size={14} /> Config</button>
+              </div>
+
+              {/* ── Botones fila 2 ── */}
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => { setStatsUserId(user.id); setStatsUserName(user.username); }} className="btn-action" style={{ color: '#00f2ff', borderColor: 'rgba(0,242,255,0.15)' }}><BarChart3 size={15} /> Stats</button>
-                <button onClick={() => downloadLog(user.id, user.username)} className="btn-action" style={{ color: '#ffaa00', borderColor: 'rgba(255,170,0,0.15)' }}><Download size={15} /> Logs</button>
-                <button onClick={() => handleOpenModal(user)} className="btn-primary" style={{ flex: 1, padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><Settings size={14} /> Ajustes</button>
-                {isAdmin && <button onClick={() => handleDelete(user.id)} className="btn-action" style={{ color: '#ff0055', borderColor: 'rgba(255,0,85,0.15)', padding: '8px 10px' }}><Trash2 size={15} /></button>}
+                <button onClick={() => handleOpenModal(user)} className="btn-primary" style={{ flex: 1 }}>Credenciales</button>
+                {isAdmin && <button onClick={() => handleDelete(user.id)} className="btn-action" style={{ color: '#ff0055', borderColor: 'rgba(255,0,85,0.15)', padding: '8px 12px' }}><Trash2 size={15} /></button>}
               </div>
             </div>
           ))}
@@ -852,126 +862,183 @@ function Dashboard({ userRole, userId, username, onLogout }) {
         </div>
       )}
 
-      {/* ─── Modal Config Global ─── */}
-      {isAdmin && isGlobalModalOpen && (
+      {/* ─── Modal Config Individual del Bot ─── */}
+      {isConfigModalOpen && (
         <div className="modal-overlay">
-          <div className="card modal-content" style={{ width: '95%', maxWidth: '750px', padding: '2rem', background: 'var(--bg-dark)', border: '1px solid rgba(112,0,255,0.3)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--secondary)' }}>AJUSTES GLOBALES</h2>
-              <button onClick={() => setIsGlobalModalOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}><X size={24} /></button>
+          <div className="card modal-content" style={{ width: '96%', maxWidth: '960px', padding: '1.2rem 1.5rem', background: 'var(--bg-dark)', border: '1px solid rgba(112,0,255,0.3)', maxHeight: '96vh', display: 'flex', flexDirection: 'column' }}>
+
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexShrink: 0 }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--secondary)' }}>⚙️ CONFIGURACIÓN DEL BOT — <span style={{ color: 'var(--text-dim)', fontWeight: '500', fontSize: '1.2rem' }}>{currentUser.username}</span></h2>
+              <button onClick={() => setIsConfigModalOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}><X size={22} /></button>
             </div>
-            <form onSubmit={handleSaveGlobal} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '70vh', overflowY: 'auto', paddingRight: '10px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '15px', background: 'linear-gradient(135deg, rgba(0, 242, 255, 0.05), rgba(112, 0, 255, 0.05))', borderRadius: '12px', border: '1px solid rgba(0, 242, 255, 0.2)' }}>
-                <label style={{ fontSize: '0.85rem', color: '#00f2ff', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <TrendingUp size={16} /> PERFIL DE RIESGO DEL BOT
+
+            {/* Aviso */}
+            <div style={{ background: 'rgba(0,255,136,0.05)', border: '1px solid rgba(0,255,136,0.2)', padding: '8px 14px', borderRadius: '8px', fontSize: '0.85rem', color: '#00ff88', fontWeight: '600', marginBottom: '10px', flexShrink: 0 }}>
+              Si el bot está <span style={{color: '#fff'}}>ACTIVO</span>, se reiniciará automáticamente al guardar.
+            </div>
+
+            <form onSubmit={handleSaveConfig} style={{ display: 'flex', flexDirection: 'column', gap: '0', flex: 1, overflow: 'hidden' }}>
+              {/* Perfil de riesgo — full width */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: 'linear-gradient(135deg, rgba(0,242,255,0.05), rgba(112,0,255,0.05))', borderRadius: '10px', border: '1px solid rgba(0,242,255,0.2)', marginBottom: '10px', flexShrink: 0 }}>
+                <label style={{ fontSize: '0.9rem', color: '#00f2ff', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                  <TrendingUp size={16} /> PERFIL DE RIESGO
                 </label>
-                <select 
-                  value={globalConfig.risk_profile} 
-                  onChange={handleRiskChange}
-                  style={{ padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', fontSize: '1rem', fontWeight: '600' }}
-                >
-                  <option value="suave">🟢 Suave (Bajo Beneficio / Bajo Riesgo)</option>
+                <select value={configData.risk_profile} onChange={handleRiskChange}
+                  style={{ flex: 1, padding: '9px 10px', borderRadius: '7px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', fontSize: '0.9rem', fontWeight: '600' }}>
+                  <option value="suave">🟢 Suave — Bajo Beneficio / Bajo Riesgo</option>
                   <option value="conservador">🔵 Conservador (Recomendado)</option>
-                  <option value="agresivo">🟠 Agresivo (Alto Capital / Rápido)</option>
-                  <option value="muy_agresivo">🔴 Muy Agresivo (ALL IN / Filtros Apagados)</option>
-                  <option value="personalizado">⚙️ Personalizado (Ajuste Manual)</option>
+                  <option value="agresivo">🟠 Agresivo — Alto Capital / Rápido</option>
+                  <option value="muy_agresivo">🔴 Muy Agresivo — ALL IN / Filtros Apagados</option>
+                  <option value="personalizado">⚙️ Personalizado — Ajuste Manual</option>
                 </select>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '4px' }}>
-                  Al seleccionar un perfil, los parámetros debajo se auto-ajustarán y los filtros anti-caída variarán.
+              </div>
+
+              {/* Cuerpo en 2 columnas */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', flex: 1, overflow: 'hidden' }}>
+
+                {/* ── Columna Izquierda ── */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', paddingRight: '4px' }}>
+
+                  {/* Estrategia dual */}
+                  <div style={{ padding: '10px 12px', background: 'rgba(0,242,255,0.05)', borderRadius: '8px', border: '1px solid rgba(0,242,255,0.15)' }}>
+                    <h3 style={{ fontSize: '0.85rem', color: '#00f2ff', marginBottom: '10px', fontWeight: '700', letterSpacing: '0.5px' }}>ESTRATEGIA DUAL (Tendencia + Rango)</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>EMA FAST</label>
+                        <input type="number" value={configData.ema_fast} onChange={(e) => setConfigData({ ...configData, ema_fast: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>EMA SLOW</label>
+                        <input type="number" value={configData.ema_slow} onChange={(e) => setConfigData({ ...configData, ema_slow: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>% INV. TENDENCIA</label>
+                        <input type="number" step="0.1" value={configData.invest_percentage} onChange={(e) => setConfigData({ ...configData, invest_percentage: parseFloat(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>% INV. RANGO</label>
+                        <input type="number" step="0.1" value={configData.invest_percentage_ranging || 15} onChange={(e) => setConfigData({ ...configData, invest_percentage_ranging: parseFloat(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>ADX PERIODO</label>
+                        <input type="number" value={configData.adx_period} onChange={(e) => setConfigData({ ...configData, adx_period: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>ADX UMBRAL</label>
+                        <input type="number" value={configData.adx_threshold} onChange={(e) => setConfigData({ ...configData, adx_threshold: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Monedas */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>MONEDAS (separadas por comas)</label>
+                    <input value={configData.pairs} onChange={(e) => setConfigData({ ...configData, pairs: e.target.value })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    <div style={{ fontSize: '0.75rem', color: 'var(--secondary)' }}>Ej: SOL/USDT,ETH/USDT,BTC/USDT</div>
+                  </div>
+
+                  {/* Timeframes */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>TIMEFRAME</label>
+                      <select value={configData.timeframe || '15m'} onChange={(e) => setConfigData({ ...configData, timeframe: e.target.value })} style={{ padding: '8px 6px', borderRadius: '7px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', fontSize: '0.9rem' }}>
+                        <option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>MACRO TF</label>
+                      <select value={configData.macro_timeframe || '1h'} onChange={(e) => setConfigData({ ...configData, macro_timeframe: e.target.value })} style={{ padding: '8px 6px', borderRadius: '7px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', fontSize: '0.9rem' }}>
+                        <option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>CANDLES</label>
+                      <input type="number" value={configData.candle_count} onChange={(e) => setConfigData({ ...configData, candle_count: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Columna Derecha ── */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', paddingRight: '4px' }}>
+
+                  {/* Parámetros numéricos */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>INTERVALO (SEG)</label>
+                      <input type="number" value={configData.interval} onChange={(e) => setConfigData({ ...configData, interval: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>PAIR DELAY</label>
+                      <input type="number" value={configData.pair_delay} onChange={(e) => setConfigData({ ...configData, pair_delay: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>TRADES/DÍA</label>
+                      <input type="number" value={configData.max_trades_per_day} onChange={(e) => setConfigData({ ...configData, max_trades_per_day: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>STOP LOSS %</label>
+                      <input type="number" step="0.1" value={configData.stop_loss_percent} onChange={(e) => setConfigData({ ...configData, stop_loss_percent: parseFloat(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>MAX EXPOSICIÓN %</label>
+                      <input type="number" step="0.1" value={configData.max_exposure_percent} onChange={(e) => setConfigData({ ...configData, max_exposure_percent: parseFloat(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>COOLDOWN (MIN)</label>
+                      <input type="number" value={configData.cooldown_minutes} onChange={(e) => setConfigData({ ...configData, cooldown_minutes: parseInt(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                    </div>
+                  </div>
+
+                  {/* Trailing stop */}
+                  <div style={{ padding: '10px 12px', background: 'rgba(112,0,255,0.05)', borderRadius: '8px', border: '1px solid rgba(112,0,255,0.15)' }}>
+                    <h3 style={{ fontSize: '0.85rem', color: '#9d00ff', marginBottom: '10px', fontWeight: '700', letterSpacing: '0.5px' }}>TRAILING STOP</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>ACTIVACIÓN (%)</label>
+                        <input type="number" step="0.1" value={configData.trailing_stop_activation} onChange={(e) => setConfigData({ ...configData, trailing_stop_activation: parseFloat(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                        <div style={{ fontSize: '0.73rem', color: 'var(--text-dim)' }}>P&amp;L mínimo para activar</div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>DISTANCIA (%)</label>
+                        <input type="number" step="0.1" value={configData.trailing_stop_distance} onChange={(e) => setConfigData({ ...configData, trailing_stop_distance: parseFloat(e.target.value) })} style={{ padding: '8px 10px', fontSize: '0.9rem' }} />
+                        <div style={{ fontSize: '0.73rem', color: 'var(--text-dim)' }}>Caída desde máximo</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Filtros intradiarios */}
+                  <div style={{ padding: '10px 12px', background: 'rgba(255,170,0,0.05)', borderRadius: '8px', border: '1px solid rgba(255,170,0,0.2)' }}>
+                    <label style={{ fontSize: '0.85rem', color: '#ffaa00', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                      <Shield size={15} /> FILTROS INTRADIARIOS
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '8px' }}>
+                      <input type="checkbox" id="useVwap" checked={configData.use_vwap_filter} onChange={(e) => setConfigData({ ...configData, use_vwap_filter: e.target.checked })} style={{ width: '18px', height: '18px', marginTop: '2px', accentColor: '#ffaa00', flexShrink: 0 }} />
+                      <div>
+                        <label htmlFor="useVwap" style={{ fontSize: '0.88rem', fontWeight: '600', color: 'white', cursor: 'pointer' }}>Solo comprar por encima del VWAP Diario</label>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Evita falsos rebotes donde los institucionales tienen posición de venta.</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                      <input type="checkbox" id="useDailyOpen" checked={configData.use_daily_open_filter} onChange={(e) => setConfigData({ ...configData, use_daily_open_filter: e.target.checked })} style={{ width: '18px', height: '18px', marginTop: '2px', accentColor: '#ffaa00', flexShrink: 0 }} />
+                      <div>
+                        <label htmlFor="useDailyOpen" style={{ fontSize: '0.88rem', fontWeight: '600', color: 'white', cursor: 'pointer' }}>Solo comprar si el Día es Verde (Sobre Apertura)</label>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>No invierte si el token está cayendo a nivel intradiario (00:00 UTC).</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Modo prueba */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(0,255,136,0.05)', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(0,255,136,0.2)' }}>
+                    <input type="checkbox" id="testMode" checked={configData.test_mode} onChange={(e) => setConfigData({ ...configData, test_mode: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: 'var(--secondary)', flexShrink: 0 }} />
+                    <label htmlFor="testMode" style={{ fontWeight: '700', color: '#00ff88', fontSize: '0.95rem', cursor: 'pointer' }}>MODO SIMULACIÓN (Sin operaciones reales)</label>
+                  </div>
                 </div>
               </div>
-              <div style={{ padding: '12px', background: 'rgba(0,242,255,0.05)', borderRadius: '8px', border: '1px solid rgba(0,242,255,0.15)' }}>
-                <h3 style={{ fontSize: '0.8rem', color: '#00f2ff', marginBottom: '12px', fontWeight: '700' }}>ESTRATEGIA DUAL (Tendencia + Rango)</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>EMA FAST (Corto)</label>
-                    <input type="number" value={globalConfig.ema_fast} onChange={(e) => setGlobalConfig({ ...globalConfig, ema_fast: parseInt(e.target.value) })} />
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>EMA SLOW (Largo)</label>
-                    <input type="number" value={globalConfig.ema_slow} onChange={(e) => setGlobalConfig({ ...globalConfig, ema_slow: parseInt(e.target.value) })} />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>% INVERSIÓN TENDENCIA</label>
-                    <input type="number" step="0.1" value={globalConfig.invest_percentage} onChange={(e) => setGlobalConfig({ ...globalConfig, invest_percentage: parseFloat(e.target.value) })} />
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>% INVERSIÓN RANGO</label>
-                    <input type="number" step="0.1" value={globalConfig.invest_percentage_ranging || 15} onChange={(e) => setGlobalConfig({ ...globalConfig, invest_percentage_ranging: parseFloat(e.target.value) })} />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>ADX PERIODO</label>
-                    <input type="number" value={globalConfig.adx_period} onChange={(e) => setGlobalConfig({ ...globalConfig, adx_period: parseInt(e.target.value) })} />
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>ADX UMBRAL (Tendencia)</label>
-                    <input type="number" value={globalConfig.adx_threshold} onChange={(e) => setGlobalConfig({ ...globalConfig, adx_threshold: parseInt(e.target.value) })} />
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>CANDLE COUNT</label>
-                  <input type="number" value={globalConfig.candle_count} onChange={(e) => setGlobalConfig({ ...globalConfig, candle_count: parseInt(e.target.value) })} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>INTERVALO (SEG)</label>
-                  <input type="number" value={globalConfig.interval} onChange={(e) => setGlobalConfig({ ...globalConfig, interval: parseInt(e.target.value) })} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>PAIR DELAY</label>
-                  <input type="number" value={globalConfig.pair_delay} onChange={(e) => setGlobalConfig({ ...globalConfig, pair_delay: parseInt(e.target.value) })} />
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>TRADES/DÍA</label>
-                  <input type="number" value={globalConfig.max_trades_per_day} onChange={(e) => setGlobalConfig({ ...globalConfig, max_trades_per_day: parseInt(e.target.value) })} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>STOP LOSS %</label>
-                  <input type="number" step="0.1" value={globalConfig.stop_loss_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, stop_loss_percent: parseFloat(e.target.value) })} />
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>MAX EXPOSICIÓN %</label>
-                  <input type="number" step="0.1" value={globalConfig.max_exposure_percent} onChange={(e) => setGlobalConfig({ ...globalConfig, max_exposure_percent: parseFloat(e.target.value) })} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>COOLDOWN (MIN)</label>
-                  <input type="number" value={globalConfig.cooldown_minutes} onChange={(e) => setGlobalConfig({ ...globalConfig, cooldown_minutes: parseInt(e.target.value) })} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'rgba(255,170,0,0.05)', padding: '15px', borderRadius: '12px', border: '1px solid rgba(255,170,0,0.2)' }}>
-                <label style={{ fontSize: '0.85rem', color: '#ffaa00', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Shield size={16} /> FILTROS DAY-TRADING INTRADIARIOS (Protección Mercados Bajistas)
-                </label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <input type="checkbox" id="useVwap" checked={globalConfig.use_vwap_filter} onChange={(e) => setGlobalConfig({ ...globalConfig, use_vwap_filter: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ffaa00' }} />
-                  <div>
-                    <label htmlFor="useVwap" style={{ fontWeight: '600', color: 'white' }}>Solo comprar por encima del VWAP Diario</label>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Evita falsos rebotes donde los institucionales tienen posición de venta.</div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <input type="checkbox" id="useDailyOpen" checked={globalConfig.use_daily_open_filter} onChange={(e) => setGlobalConfig({ ...globalConfig, use_daily_open_filter: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ffaa00' }} />
-                  <div>
-                    <label htmlFor="useDailyOpen" style={{ fontWeight: '600', color: 'white' }}>Solo comprar si el Día Actual es Verde (Sobre Apertura)</label>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>No invierte nada si el token está cayendo a nivel intradiario (00:00 UTC).</div>
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(0,255,136,0.05)', padding: '15px', borderRadius: '12px', border: '1px solid rgba(0,255,136,0.2)' }}>
-                <input type="checkbox" id="testMode" checked={globalConfig.test_mode} onChange={(e) => setGlobalConfig({ ...globalConfig, test_mode: e.target.checked })} style={{ width: '20px', height: '20px', accentColor: 'var(--secondary)' }} />
-                <label htmlFor="testMode" style={{ fontWeight: '600', color: '#00ff88' }}>MODO PRUEBA (SIMULACIÓN)</label>
-              </div>
-              <button type="submit" className="btn-primary" style={{ marginTop: '0.5rem', width: '100%', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexShrink: 0 }}>
-                <Save size={18} /> APLICAR CAMBIOS GLOBALES
+
+              {/* Botón guardar */}
+              <button type="submit" className="btn-primary" style={{ marginTop: '10px', width: '100%', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexShrink: 0 }}>
+                <Save size={16} /> APLICAR CAMBIOS AL BOT
               </button>
             </form>
           </div>
