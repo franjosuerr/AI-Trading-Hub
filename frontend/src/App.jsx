@@ -823,11 +823,19 @@ function Dashboard({ userRole, userId, username, onLogout }) {
 
   const handleSaveConfig = async (e) => {
     e.preventDefault();
-    try { 
-      await api.put(`/users/${currentUser.id}`, configData); 
+    try {
+      // Detectar cambio de test_mode
+      const prevTestMode = currentUser.test_mode;
+      const newTestMode = configData.test_mode;
+      await api.put(`/users/${currentUser.id}`, configData);
       logger.info('Config guardada', { user_id: currentUser.id, risk_profile: configData.risk_profile });
-      setIsConfigModalOpen(false); 
-      fetchData(); 
+      // Si cambia test_mode, resetear profit, compras y ventas
+      if (prevTestMode !== newTestMode) {
+        await api.post(`/bot/${currentUser.id}/reset_stats`);
+        logger.info('Se reseteó profit, compras y ventas por cambio de modo', { user_id: currentUser.id });
+      }
+      setIsConfigModalOpen(false);
+      fetchData();
     }
     catch (error) { logger.error('Error al guardar config', { user_id: currentUser.id, error: error.response?.data?.detail }); alert(error.response?.data?.detail || "Error al guardar configuración"); }
   };

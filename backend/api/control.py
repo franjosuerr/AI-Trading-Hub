@@ -25,6 +25,33 @@ class ManualSellRequest(BaseModel):
 
 class ManualBuyRequest(BaseModel):
     pair: str
+
+# Endpoint para resetear estadísticas (profit, compras, ventas)
+@router.post("/{user_id}/reset_stats")
+async def reset_stats(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """Resetea todas las estadísticas del usuario: elimina trades (profit, compras, ventas)"""
+    current = get_current_user_from_token(request)
+    if current["role"] != "admin" and int(current["sub"]) != user_id:
+        raise HTTPException(status_code=403, detail="Solo puedes controlar tu propio bot")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # Eliminar todos los trades del usuario
+    deleted = db.query(Trade).filter(Trade.user_id == user_id).delete()
+    db.commit()
+
+    # Opcional: resetear balances virtuales si aplica
+    try:
+        from bot.bot_manager import _virtual_balances
+        if user_id in _virtual_balances:
+            _virtual_balances[user_id] = {}
+    except Exception:
+        pass
+
+    logger.info(f"Se reseteó profit, compras y ventas para usuario {user.username} (ID: {user_id})")
+    return {"message": f"Se han reseteado las estadísticas del usuario ({deleted} trades eliminados)"}
 @router.post("/{user_id}/manual_buy")
 async def manual_buy(user_id: int, body: ManualBuyRequest, request: Request, db: Session = Depends(get_db)):
     """Compra manual de una moneda. Solo si no hay posición abierta en esa moneda."""
