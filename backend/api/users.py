@@ -19,10 +19,32 @@ def _hash_password(password: str) -> str:
 
 
 def _user_with_profit(user, db):
-    """Agrega total_profit al dict del usuario."""
+    """Agrega total_profit y total_invested_trapped al dict del usuario."""
     profit = db.query(func.sum(Trade.profit)).filter(Trade.user_id == user.id).scalar() or 0.0
     user_dict = {k: v for k, v in user.__dict__.items() if not k.startswith('_')}
     user_dict["total_profit"] = round(float(profit), 4)
+
+    # Calcular total invertido atrapado (posiciones abiertas)
+    trades = db.query(Trade).filter(Trade.user_id == user.id).order_by(Trade.timestamp.asc()).all()
+    positions = {}
+    for t in trades:
+        if t.pair not in positions:
+            positions[t.pair] = {"amount": 0.0, "total_cost": 0.0}
+        if t.side == "buy":
+            positions[t.pair]["amount"] += t.amount
+            positions[t.pair]["total_cost"] += (t.amount * t.price)
+        elif t.side == "sell":
+            prev_amount = positions[t.pair]["amount"]
+            if prev_amount > 0:
+                cost_reduction_ratio = min(t.amount / prev_amount, 1.0)
+                positions[t.pair]["total_cost"] -= (positions[t.pair]["total_cost"] * cost_reduction_ratio)
+            positions[t.pair]["amount"] -= t.amount
+            if positions[t.pair]["amount"] < 0.0001:
+                positions[t.pair]["amount"] = 0.0
+                positions[t.pair]["total_cost"] = 0.0
+    total_trapped = sum(p["total_cost"] for p in positions.values() if p["amount"] > 0.0001)
+    user_dict["total_invested_trapped"] = round(total_trapped, 2)
+
     return user_dict
 
 
