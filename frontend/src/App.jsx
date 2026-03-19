@@ -967,8 +967,8 @@ function Dashboard({ userRole, userId, username, onLogout }) {
 
               {/* ── Botones fila 2 ── */}
               <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => { setManualOperationUserId(user.id); setManualOperationUserName(user.username); }} className="btn-action" style={{ color: '#00ff88', borderColor: 'rgba(0,242,255,0.2)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', fontWeight: '700' }} title="Operación Manual"><DollarSign size={15} />Manual</button>
                 <button onClick={() => handleOpenModal(user)} className="btn-primary" style={{ flex: 1 }}>Credenciales</button>
-                <button onClick={() => { setManualOperationUserId(user.id); setManualOperationUserName(user.username); }} className="btn-action" style={{ color: '#00ff88', borderColor: 'rgba(0,242,255,0.2)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', fontWeight: '700' }} title="Operación Manual"><DollarSign size={15} /> Operación Manual</button>
                 {isAdmin && <button onClick={() => handleDelete(user.id)} className="btn-action" style={{ color: '#ff0055', borderColor: 'rgba(255,0,85,0.15)', padding: '8px 12px' }}><Trash2 size={15} /></button>}
               </div>
             </div>
