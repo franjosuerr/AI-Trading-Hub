@@ -175,15 +175,16 @@ function UserStatsModal({ userId, userName, onClose }) {
   const [positionsPairFilter, setPositionsPairFilter] = useState('');
 
   const [activeTab, setActiveTab] = useState('trades'); // 'trades' | 'positions'
+  const [currentPeriod, setCurrentPeriod] = useState('today'); // 'today' | 'yesterday' | 'week' | 'month'
   const [currentMonth, setCurrentMonth] = useState(() => {
     const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
     return `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}`;
   });
 
-  useEffect(() => { 
-    fetchStats(); 
+  useEffect(() => {
+    fetchStats();
     fetchTradesPaginated();
-  }, [currentMonth]);
+  }, [currentPeriod, currentMonth]);
   
   useEffect(() => { 
     fetchBalance(); 
@@ -210,7 +211,9 @@ function UserStatsModal({ userId, userName, onClose }) {
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const res = await api.get(`/stats/${userId}/monthly?month=${currentMonth}`);
+      const qs = new URLSearchParams({ period: currentPeriod });
+      if (currentPeriod === 'month') qs.set('month', currentMonth);
+      const res = await api.get(`/stats/${userId}/monthly?${qs.toString()}`);
       setStats(res.data);
     } catch (err) { console.error('Error fetching stats:', err); }
     finally { setLoading(false); }
@@ -220,13 +223,14 @@ function UserStatsModal({ userId, userName, onClose }) {
     setTradesLoading(true);
     try {
       const qs = new URLSearchParams({
-        month: currentMonth,
+        period: currentPeriod,
         page: tradesPage,
         limit: tradesLimit,
       });
+      if (currentPeriod === 'month') qs.set('month', currentMonth);
       if (tradesPairFilter) qs.append('pair', tradesPairFilter);
       if (tradesSideFilter) qs.append('side', tradesSideFilter);
-      
+
       const res = await api.get(`/stats/${userId}/trades/paginated?${qs.toString()}`);
       setTradesPaginated(res.data);
     } catch (err) { console.error('Error fetching trades:', err); }
@@ -258,6 +262,17 @@ function UserStatsModal({ userId, userName, onClose }) {
     const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
     return `${months[m - 1]} ${y}`;
   })();
+
+  const periodLabels = { today: 'Hoy', yesterday: 'Ayer', week: 'Esta Semana', '3months': 'Últimos 3 Meses', month: monthLabel };
+  const periodLabel = periodLabels[currentPeriod] || monthLabel;
+
+  const PERIODS = [
+    { key: 'today', label: 'HOY' },
+    { key: 'yesterday', label: 'AYER' },
+    { key: 'week', label: 'SEMANA' },
+    { key: '3months', label: '3 MESES' },
+    { key: 'month', label: 'MES' },
+  ];
 
   const s = stats?.summary || {};
 
@@ -307,14 +322,33 @@ function UserStatsModal({ userId, userName, onClose }) {
             )}
           </div>
 
-          {/* Métricas del mes */}
+          {/* Métricas del período */}
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-              <h3 style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: '700', letterSpacing: '1px' }}>RENDIMIENTO</h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <button onClick={() => changeMonth(-1)} className="btn-action" style={{ padding: '4px 8px' }}><ChevronLeft size={14} /></button>
-                <span style={{ fontSize: '0.82rem', fontWeight: '700', minWidth: '120px', textAlign: 'center' }}>{monthLabel}</span>
-                <button onClick={() => changeMonth(1)} className="btn-action" style={{ padding: '4px 8px' }}><ChevronRight size={14} /></button>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+              <h3 style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: '700', letterSpacing: '1px' }}>RENDIMIENTO — {periodLabel}</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {PERIODS.map(p => (
+                  <button
+                    key={p.key}
+                    onClick={() => { setCurrentPeriod(p.key); setTradesPage(1); }}
+                    className="btn-action"
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '0.7rem',
+                      fontWeight: '700',
+                      background: currentPeriod === p.key ? 'rgba(0,242,255,0.15)' : undefined,
+                      color: currentPeriod === p.key ? '#00f2ff' : undefined,
+                      border: currentPeriod === p.key ? '1px solid rgba(0,242,255,0.5)' : undefined,
+                    }}
+                  >{p.label}</button>
+                ))}
+                {currentPeriod === 'month' && (
+                  <>
+                    <button onClick={() => changeMonth(-1)} className="btn-action" style={{ padding: '4px 8px' }}><ChevronLeft size={14} /></button>
+                    <span style={{ fontSize: '0.82rem', fontWeight: '700', minWidth: '100px', textAlign: 'center' }}>{monthLabel}</span>
+                    <button onClick={() => changeMonth(1)} className="btn-action" style={{ padding: '4px 8px' }}><ChevronRight size={14} /></button>
+                  </>
+                )}
               </div>
             </div>
             {loading ? (
@@ -359,7 +393,7 @@ function UserStatsModal({ userId, userName, onClose }) {
                       <Line type="monotone" dataKey="daily" stroke="#7000ff" strokeWidth={1} strokeDasharray="5 5" dot={false} name="Diario" />
                     </LineChart>
                   </ResponsiveContainer>
-                ) : <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: '0.85rem' }}>Sin datos este mes</div>}
+                ) : <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: '0.85rem' }}>Sin datos para este período</div>}
               </div>
               <div className="glass-panel" style={{ padding: '16px' }}>
                 <h3 style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: '700', marginBottom: '12px' }}>COMPRA / VENTA</h3>

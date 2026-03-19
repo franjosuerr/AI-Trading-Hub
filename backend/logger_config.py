@@ -36,7 +36,7 @@ def _ensure_dirs():
     os.makedirs(BOT_LOG_DIR, exist_ok=True)
 
 
-def _create_daily_handler(filepath, backup_days=30):
+def _create_daily_handler(filepath, backup_days=90):
     """Crea un handler con rotación diaria y retención de N días."""
     handler = TimedRotatingFileHandler(
         filepath, when="midnight", interval=1,

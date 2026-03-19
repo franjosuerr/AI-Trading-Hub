@@ -13,6 +13,37 @@ import ccxt
 def get_colombia_time():
     return datetime.utcnow() - timedelta(hours=5)
 
+
+def get_date_range(period: str = 'today', month: str = None):
+    """Calcula start_date y end_date según el período solicitado."""
+    now = get_colombia_time()
+    if period == 'today':
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif period == 'yesterday':
+        yesterday = now - timedelta(days=1)
+        start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif period == 'week':
+        monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = monday
+        end = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == '3months':
+        start = (now - timedelta(days=90)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:  # 'month'
+        if month:
+            try:
+                year, mon = map(int, month.split("-"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Formato de mes inválido. Usa YYYY-MM")
+        else:
+            year, mon = now.year, now.month
+        start = datetime(year, mon, 1)
+        end = datetime(year + 1, 1, 1) if mon == 12 else datetime(year, mon + 1, 1)
+    return start, end
+
+
 router = APIRouter(prefix="/stats", tags=["Statistics"])
 
 
@@ -99,33 +130,19 @@ def get_user_trades(user_id: int, request: Request, db: Session = Depends(get_db
 
 
 @router.get("/{user_id}/monthly")
-def get_monthly_stats(user_id: int, request: Request, month: str = None, db: Session = Depends(get_db)):
+def get_monthly_stats(user_id: int, request: Request, period: str = 'today', month: str = None, db: Session = Depends(get_db)):
     """
-    Estadísticas mensuales de un usuario.
-    month: formato YYYY-MM (default: mes actual)
+    Estadísticas de un usuario por período.
+    period: 'today' | 'yesterday' | 'week' | '3months' | 'month' (default: today)
+    month: formato YYYY-MM, sólo aplica cuando period='month'
     """
     current = get_current_user_from_token(request)
     if current["role"] != "admin" and int(current["sub"]) != user_id:
         raise HTTPException(status_code=403, detail="No tienes acceso a estas estadísticas")
 
-    # Determinar rango de fechas
-    if month:
-        try:
-            year, mon = map(int, month.split("-"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Formato de mes inválido. Usa YYYY-MM")
-    else:
-        now = get_colombia_time()
-        year, mon = now.year, now.month
+    start_date, end_date = get_date_range(period, month)
 
-    # Inicio y fin del mes
-    start_date = datetime(year, mon, 1)
-    if mon == 12:
-        end_date = datetime(year + 1, 1, 1)
-    else:
-        end_date = datetime(year, mon + 1, 1)
-
-    # Obtener trades del mes
+    # Obtener trades del período
     trades = db.query(Trade).filter(
         Trade.user_id == user_id,
         Trade.timestamp >= start_date,
@@ -194,7 +211,8 @@ def get_monthly_stats(user_id: int, request: Request, month: str = None, db: Ses
 
     return {
         "user_id": user_id,
-        "month": f"{year}-{mon:02d}",
+        "period": period,
+        "month": month,
         "summary": {
             "total_trades": total_trades,
             "total_profit": round(total_profit, 4),
@@ -295,8 +313,9 @@ def get_open_positions(
 
 @router.get("/{user_id}/trades/paginated")
 def get_user_trades_paginated(
-    user_id: int, 
-    request: Request, 
+    user_id: int,
+    request: Request,
+    period: str = 'today',
     month: str = None,
     page: int = 1,
     limit: int = 20,
@@ -310,15 +329,13 @@ def get_user_trades_paginated(
 
     query = db.query(Trade).filter(Trade.user_id == user_id)
 
-    # Filtro por mes (opcional pero por defecto actúa sobre el actual si se requiere desde UI)
-    if month:
+    # Filtro por período
+    if period:
         try:
-            year, mon = map(int, month.split("-"))
-            start_date = datetime(year, mon, 1)
-            end_date = datetime(year + 1, 1, 1) if mon == 12 else datetime(year, mon + 1, 1)
+            start_date, end_date = get_date_range(period, month)
             query = query.filter(Trade.timestamp >= start_date, Trade.timestamp < end_date)
-        except ValueError:
-            pass # Si falla o es "all", ignora filtro de fecha
+        except Exception:
+            pass  # Si falla, ignora filtro de fecha
 
     # Filtros String (Like)
     if pair:
