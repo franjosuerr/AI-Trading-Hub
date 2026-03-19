@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Users, Activity, Settings, TrendingUp, Play, Square, Plus, Trash2, Bot, X, Save, LogOut, Lock, UserPlus, Shield, BarChart3, ChevronLeft, ChevronRight, Download } from 'lucide-react';
+import { Layout, Users, Activity, Settings, TrendingUp, Play, Square, Plus, Trash2, Bot, X, Save, LogOut, Lock, UserPlus, Shield, BarChart3, ChevronLeft, ChevronRight, Download, AlertTriangle, DollarSign } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import axios from 'axios';
 import logger from './utils/logger';
+import ManualOperationModal from './ManualOperationModal';
 
 const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8000" : "");
 
@@ -580,6 +581,163 @@ function UserStatsModal({ userId, userName, onClose }) {
 }
 
 // ══════════════════════════════════════════════
+// MANUAL SELL MODAL
+// ══════════════════════════════════════════════
+function ManualSellModal({ userId, userName, onClose }) {
+  const [positions, setPositions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selling, setSelling] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [confirmPair, setConfirmPair] = useState(null);
+
+  useEffect(() => { fetchPositions(); }, []);
+
+  const fetchPositions = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/stats/${userId}/open_positions?limit=100`);
+      setPositions(res.data?.data || []);
+    } catch (err) {
+      setError('Error al cargar posiciones abiertas');
+    } finally { setLoading(false); }
+  };
+
+  const handleSell = async (pair) => {
+    setSelling(pair);
+    setResult(null);
+    setError('');
+    setConfirmPair(null);
+    try {
+      const res = await api.post(`/bot/${userId}/manual_sell`, { pair });
+      setResult(res.data);
+      // Remover la posición vendida de la lista
+      setPositions(prev => prev.filter(p => p.pair !== pair));
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Error al ejecutar la venta manual');
+    } finally { setSelling(null); }
+  };
+
+  return (
+    <div className="modal-overlay">
+      <div className="card modal-content" style={{ width: '96%', maxWidth: '700px', maxHeight: '90vh', overflow: 'auto', padding: '2rem', background: 'var(--bg-dark)', border: '1px solid rgba(255, 85, 136, 0.3)' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ background: 'rgba(255,85,136,0.1)', padding: '10px', borderRadius: '12px' }}>
+              <DollarSign size={22} style={{ color: '#ff5588' }} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '1.3rem', fontWeight: '800', color: '#ff5588' }}>VENTA MANUAL</h2>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>{userName}</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}><X size={24} /></button>
+        </div>
+
+        {/* Aviso */}
+        <div style={{ background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.25)', padding: '12px 16px', borderRadius: '10px', fontSize: '0.82rem', color: '#ffaa00', marginBottom: '1.5rem', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+          <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: '1px' }} />
+          <span>Selecciona una posición abierta y haz clic en <strong>VENDER</strong> para ejecutar una orden de venta inmediata al precio actual del mercado. Esta operación se registrará como <strong>venta manual</strong> en las estadísticas y logs.</span>
+        </div>
+
+        {/* Resultado exitoso */}
+        {result && (
+          <div style={{ background: 'rgba(0,255,136,0.08)', border: '1px solid rgba(0,255,136,0.25)', padding: '16px', borderRadius: '10px', marginBottom: '1.5rem' }}>
+            <div style={{ fontWeight: '800', color: '#00ff88', marginBottom: '8px', fontSize: '0.95rem' }}>VENTA EJECUTADA</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.82rem' }}>
+              <div><span style={{ color: 'var(--text-dim)' }}>Par:</span> <strong>{result.pair}</strong></div>
+              <div><span style={{ color: 'var(--text-dim)' }}>Cantidad:</span> <strong>{result.amount}</strong></div>
+              <div><span style={{ color: 'var(--text-dim)' }}>Precio venta:</span> <strong>${result.price}</strong></div>
+              <div><span style={{ color: 'var(--text-dim)' }}>Precio entrada:</span> <strong>${result.avg_entry_price}</strong></div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <span style={{ color: 'var(--text-dim)' }}>Profit:</span>{' '}
+                <strong style={{ color: result.profit >= 0 ? '#00ff88' : '#ff5588', fontSize: '1.1rem' }}>
+                  {result.profit >= 0 ? '+' : ''}{result.profit} USDT
+                </strong>
+                {result.simulated && <span style={{ marginLeft: '8px', background: 'rgba(255,170,0,0.1)', color: '#ffaa00', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '700' }}>SIMULADA</span>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div style={{ background: 'rgba(255,0,85,0.08)', border: '1px solid rgba(255,0,85,0.25)', color: '#ff5588', padding: '12px 16px', borderRadius: '10px', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+            {error}
+          </div>
+        )}
+
+        {/* Tabla de posiciones */}
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-dim)' }}>Cargando posiciones abiertas...</div>
+        ) : positions.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-dim)' }}>
+            <Shield size={40} style={{ margin: '0 auto 12px', opacity: 0.3 }} />
+            <p style={{ fontSize: '1rem', fontWeight: '600' }}>No tienes posiciones abiertas</p>
+            <p style={{ fontSize: '0.82rem', marginTop: '4px' }}>No hay compras pendientes de venta.</p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                  <th style={{ textAlign: 'left', padding: '10px 8px', color: 'var(--text-dim)', fontWeight: '700' }}>PAR</th>
+                  <th style={{ textAlign: 'right', padding: '10px 8px', color: 'var(--text-dim)', fontWeight: '700' }}>CANTIDAD</th>
+                  <th style={{ textAlign: 'right', padding: '10px 8px', color: 'var(--text-dim)', fontWeight: '700' }}>PRECIO ENTRADA</th>
+                  <th style={{ textAlign: 'right', padding: '10px 8px', color: 'var(--text-dim)', fontWeight: '700' }}>INVERTIDO</th>
+                  <th style={{ textAlign: 'center', padding: '10px 8px', color: 'var(--text-dim)', fontWeight: '700' }}>ACCIÓN</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.map((p) => (
+                  <tr key={p.pair} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <td style={{ padding: '12px 8px', fontWeight: '700' }}>
+                      {p.pair}
+                      <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--text-dim)', marginTop: '2px' }}>Pendiente</span>
+                    </td>
+                    <td style={{ padding: '12px 8px', textAlign: 'right', color: '#00f2ff' }}>{p.amount}</td>
+                    <td style={{ padding: '12px 8px', textAlign: 'right' }}>${p.avg_entry_price}</td>
+                    <td style={{ padding: '12px 8px', textAlign: 'right', fontWeight: '700', color: '#ffaa00' }}>${p.total_invested.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                    <td style={{ padding: '12px 8px', textAlign: 'center' }}>
+                      {confirmPair === p.pair ? (
+                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                          <button
+                            onClick={() => handleSell(p.pair)}
+                            disabled={selling === p.pair}
+                            style={{ background: 'rgba(255,0,85,0.15)', color: '#ff0055', border: '1px solid rgba(255,0,85,0.3)', padding: '6px 14px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '800', cursor: 'pointer', opacity: selling === p.pair ? 0.6 : 1 }}
+                          >
+                            {selling === p.pair ? 'VENDIENDO...' : 'CONFIRMAR'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmPair(null)}
+                            style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-dim)', border: '1px solid rgba(255,255,255,0.1)', padding: '6px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '700', cursor: 'pointer' }}
+                          >
+                            CANCELAR
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setConfirmPair(p.pair); setError(''); setResult(null); }}
+                          disabled={!!selling}
+                          style={{ background: 'rgba(255,85,136,0.1)', color: '#ff5588', border: '1px solid rgba(255,85,136,0.2)', padding: '6px 16px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '800', cursor: 'pointer', transition: 'all 0.2s' }}
+                        >
+                          VENDER
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════
 function Dashboard({ userRole, userId, username, onLogout }) {
@@ -597,6 +755,10 @@ function Dashboard({ userRole, userId, username, onLogout }) {
   
   const [statsUserId, setStatsUserId] = useState(null);
   const [statsUserName, setStatsUserName] = useState('');
+  
+  // Manual Operation Modal
+  const [manualOperationUserId, setManualOperationUserId] = useState(null);
+  const [manualOperationUserName, setManualOperationUserName] = useState('');
 
   useEffect(() => { fetchData(); const interval = setInterval(fetchData, 10000); return () => clearInterval(interval); }, []);
 
@@ -806,6 +968,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
               {/* ── Botones fila 2 ── */}
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={() => handleOpenModal(user)} className="btn-primary" style={{ flex: 1 }}>Credenciales</button>
+                <button onClick={() => { setManualOperationUserId(user.id); setManualOperationUserName(user.username); }} className="btn-action" style={{ color: '#00ff88', borderColor: 'rgba(0,242,255,0.2)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', fontWeight: '700' }} title="Operación Manual"><DollarSign size={15} /> Operación Manual</button>
                 {isAdmin && <button onClick={() => handleDelete(user.id)} className="btn-action" style={{ color: '#ff0055', borderColor: 'rgba(255,0,85,0.15)', padding: '8px 12px' }}><Trash2 size={15} /></button>}
               </div>
             </div>
@@ -1094,6 +1257,11 @@ function Dashboard({ userRole, userId, username, onLogout }) {
       {/* Stats Modal */}
       {statsUserId && (
         <UserStatsModal userId={statsUserId} userName={statsUserName} onClose={() => setStatsUserId(null)} />
+      )}
+
+      {/* Manual Operation Modal */}
+      {manualOperationUserId && (
+        <ManualOperationModal userId={manualOperationUserId} userName={manualOperationUserName} onClose={() => { setManualOperationUserId(null); fetchData(); }} />
       )}
     </div>
   );
