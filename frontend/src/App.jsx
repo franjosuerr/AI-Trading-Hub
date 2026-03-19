@@ -766,6 +766,14 @@ function Dashboard({ userRole, userId, username, onLogout }) {
                 </span>
               </div>
 
+              {/* ── Total Invertido Atrapado ── */}
+              <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '10px', padding: '10px 14px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: '600', letterSpacing: '0.5px' }}>TOTAL INVERTIDO ATRAPADO</span>
+                <span style={{ fontSize: '1rem', fontWeight: '800', color: '#ffaa00' }}>
+                  ${(user.total_invested_trapped || 0).toFixed(2)}
+                </span>
+              </div>
+
               {/* ── Info ── */}
               <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.78rem', display: 'flex', flexDirection: 'column', gap: '7px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
