@@ -84,6 +84,30 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Trading Bot API")
 
+# ─── Limpieza diaria de trades antiguos (medianoche hora Colombia) ───
+async def daily_cleanup():
+    """Elimina trades con más de 90 días todos los días a las 00:00 hora Colombia."""
+    from .database import SessionLocal
+    from datetime import datetime, timedelta
+    while True:
+        now_col = datetime.utcnow() - timedelta(hours=5)
+        next_midnight = (now_col + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_until_midnight = (next_midnight - now_col).total_seconds()
+        await asyncio.sleep(seconds_until_midnight)
+
+        _db = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(hours=5) - timedelta(days=90)
+            deleted = _db.query(Trade).filter(Trade.timestamp < cutoff).delete()
+            _db.commit()
+            logger.info(f"[Limpieza diaria] {deleted} trades eliminados (>90 días).")
+        except Exception as e:
+            logger.error(f"[Limpieza diaria] Error: {e}")
+            _db.rollback()
+        finally:
+            _db.close()
+
+
 # ─── Keep-Alive (evitar que Render duerma la app) ───
 async def keep_alive():
     """Ping a sí mismo cada 10 minutos para evitar que Render duerma la instancia."""
@@ -104,9 +128,25 @@ async def keep_alive():
 
 @app.on_event("startup")
 async def startup_event():
-    # Limpiar logs con más de 30 días
-    cleanup_old_logs(max_days=30)
+    # Limpiar logs con más de 90 días
+    cleanup_old_logs(max_days=90)
     logger.info("Limpieza de logs antiguos completada.")
+
+    # Limpiar trades con más de 90 días de la BD
+    from .database import SessionLocal
+    from datetime import datetime, timedelta
+    _db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=5) - timedelta(days=90)  # hora Colombia
+        deleted = _db.query(Trade).filter(Trade.timestamp < cutoff).delete()
+        _db.commit()
+        if deleted:
+            logger.info(f"Limpieza BD: {deleted} trades eliminados (>90 días).")
+    except Exception as e:
+        logger.error(f"Error limpiando trades antiguos: {e}")
+        _db.rollback()
+    finally:
+        _db.close()
 
     logger.info("Sincronizando bots activos desde la base de datos...")
     from .database import SessionLocal
@@ -124,8 +164,10 @@ async def startup_event():
     finally:
         db.close()
 
-    # Iniciar keep-alive
+    # Iniciar keep-alive y limpieza diaria
     asyncio.create_task(keep_alive())
+    asyncio.create_task(daily_cleanup())
+    logger.info("Tarea de limpieza diaria programada para las 00:00 hora Colombia.")
 
 # Configurar CORS para el frontend
 app.add_middleware(
