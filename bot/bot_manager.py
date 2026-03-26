@@ -694,21 +694,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 
                 if is_uptrend_local and is_pullback:
                     if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass or not filter_vol_pass or not filter_macro_pass):
-                        reason = f"[BULL] Compra bloqueada por perfil Suave (VWAP/Daily/Vol/Macro falló)"
+                        reason = "MERCADO ALCISTA: Compra pausada por filtros intradiarios de seguridad (VWAP/Daily/Volumen)."
                     elif risk_profile == "conservador" and (not filter_vwap_pass or not filter_macro_pass):
-                        reason = f"[BULL] Compra bloqueada por perfil Conservador (VWAP o Macro bajista)"
+                        reason = "MERCADO ALCISTA: Compra pausada, el VWAP o la macro no favorecen este perfil conservador."
                     else:
                         signal = "buy"
-                        reason = f"[BULL] Trend Following: Pullback detectado (P={current_price} <= EMA_fast*1.005={last_ema_fast * 1.005:.2f})"
+                        reason = f"MERCADO ALCISTA: ¡Comprando! El precio bajó a {current_price} rebotando justo en nuestro soporte confiable (EMA Rápida en ~{last_ema_fast:.0f})."
                         amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
                 else:
-                    reason = f"[BULL] Esperando pullback a EMA Rápida ({last_ema_fast:.2f})"
+                    if not is_uptrend_local:
+                        reason = f"MERCADO ALCISTA: Esperando. La micro-tendencia aún no gira hacia arriba (EMA rápida de {last_ema_fast:.0f} no ha cortado)."
+                    else:
+                        reason = f"MERCADO ALCISTA: Observando. Esperaré con paciencia un retroceso temporal a los ~{last_ema_fast:.0f} para cazar un buen descuento."
 
             elif regime == "BEAR":
                 # ═══ ESTRATEGIA BEAR: Protección o Mean Reversion Extrema ═══
                 strategy_name = "Protección - Bear"
                 if risk_profile in ["suave", "conservador"]:
-                    reason = f"[BEAR] Bloqueado. Perfil {risk_profile} no opera en tendencia bajista."
+                    reason = f"MERCADO BAJISTA: Bot en el sofá. Tu perfil '{risk_profile}' prohíbe cazar cuchillos al vuelo bajista."
                 else:
                     # En Agresivo/Muy Agresivo: busca rebote extremo
                     rsi_rebote_extremo = 15 if risk_profile == "agresivo" else 20
@@ -717,10 +720,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     
                     if is_oversold_brutal and is_at_bb_lower:
                         signal = "buy"
-                        reason = f"[BEAR] Mean Reversion Extrema (Contratendencia): RSI={last_rsi:.1f}<{rsi_rebote_extremo} y en BB Inferior"
+                        reason = f"MERCADO BAJISTA: ¡Comprando rebote violento! Todo está en pánico extremo (RSI={last_rsi:.0f}) tocando nuestro fondo absoluto ({last_bb_lower:.0f})."
                         amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
                     else:
-                        reason = f"[BEAR] Buscando sobreventa extrema (RSI<{rsi_rebote_extremo}) para rebote"
+                        reason = f"MERCADO BAJISTA: Absteniéndose. No voy a comprar hasta ver pánico ciego (RSI debajo de {rsi_rebote_extremo}) en el suelo de ~{last_bb_lower:.0f}. RSI actual: {last_rsi:.0f}."
 
             elif regime == "RANGO":
                 # ═══ ESTRATEGIA MEAN REVERSION: RSI + Bollinger ═══
@@ -730,13 +733,14 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 
                 if is_oversold and is_at_bb_lower:
                     if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass):
-                        reason = f"[RANGO] Bloqueado por perfil Suave (Filtros Intradiarios negativos)"
+                        reason = f"MERCADO LATERAL: Bloqueado por seguridad de tu perfil (VWAP Inseguro o Daily bajo)."
                     else:
                         signal = "buy"
-                        reason = f"[RANGO] Mean Reversion: RSI={last_rsi:.1f}<{rsi_rango_threshold} + P={current_price} <= BB_lower={last_bb_lower:.2f}"
+                        reason = f"MERCADO LATERAL: ¡Comprando soporte! El precio tocó nuestro suelo del rango ({current_price}) luego de calmarse el RSI ({last_rsi:.0f})."
                         amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
                 else:
-                    reason = f"[RANGO] Esperando sobreventa (RSI<{rsi_rango_threshold} y BB_lower)"
+                    distancia_fondo = (current_price - last_bb_lower) if current_price else 0
+                    reason = f"MERCADO LATERAL: Sigo dormido. Esperaré que caiga {distancia_fondo:.0f} dólares hacia suelo (~{last_bb_lower:.0f}) y se asiente el RSI (<{rsi_rango_threshold})."
         else:
             # ─── VENTA (con posición abierta) ───
             avg_entry_price = portfolio_ctx.get("avg_entry_price", 0.0)
@@ -786,6 +790,20 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             if trade_duration_hours >= 6.0 and pnl_pct > -stop_loss and pnl_pct < 1.0 and not is_trending:
                 is_time_stop = True
 
+            # Evaluar Technical Stop (Pánico Estructural multi-régimen)
+            is_technical_stop = False
+            technical_reason = ""
+            if current_price and pnl_pct <= -1.0:
+                if is_trending and current_price < last_ema_50:
+                    is_technical_stop = True
+                    technical_reason = f"Filtro Pánico [Tendencia]: Ruptura de EMA50 ({last_ema_50:.2f})"
+                elif not is_trending and current_price < (last_bb_lower * 0.995):
+                    is_technical_stop = True
+                    technical_reason = f"Filtro Pánico [Rango]: Ruptura de Soporte BB inferior ({last_bb_lower:.2f})"
+                elif use_vwap and last_vwap > 0 and current_price < last_vwap:
+                    is_technical_stop = True
+                    technical_reason = f"Filtro Pánico: Cierre bajo VWAP ({last_vwap:.2f})"
+
             # Evaluar Trailing Stop
             is_trailing_stop = False
             if max_pnl_pct >= trailing_activation and pnl_pct <= (max_pnl_pct - trailing_distance):
@@ -794,29 +812,32 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             # ═══ Condiciones de venta (priorizadas) ═══
             if is_trailing_stop:
                 signal = "sell"
-                reason = f"Trailing Stop: Cae a {pnl_pct:.2f}% desde máximo {max_pnl_pct:.2f}%"
+                reason = f"Asegurador activado (Trailing Stop): Vendí al caer a {pnl_pct:.2f}% luego de rozar tu máximo de +{max_pnl_pct:.2f}%. ¡Ganancia salvada!"
+            elif is_technical_stop:
+                signal = "sell"
+                reason = f"Liquidación de emergencia ahorrando pérdidas: {technical_reason} | Huimos con {pnl_pct:.2f}% de pérdida esquivando tu -{stop_loss}% duro."
             elif pnl_pct <= -dynamic_stop_loss:
                 signal = "sell"
                 if dynamic_stop_loss == -0.1:
-                    reason = f"Break-Even Stop: Salida sin pérdidas en {pnl_pct:.2f}% (Máximo previo {max_pnl_pct:.2f}%)"
+                    reason = f"🛡 Activé tu Break-Even en Break-Even puro: Me escapé protegiendo el trade por los pelos en {pnl_pct:.2f}%. El máximo llegó a +{max_pnl_pct:.2f}%."
                 else:
-                    reason = f"Stop Loss: {pnl_pct:.2f}% <= -{stop_loss}%"
+                    reason = f"Stop Loss Duro Superado: Amputando la herida de un tirón para salvar saldo. (P&L: {pnl_pct:.2f}% <= -{stop_loss}%)"
             elif is_time_stop:
                 signal = "sell"
-                reason = f"Time-Stop: Agotamiento de tendencia ({trade_duration_hours:.1f} horas estancado). P&L={pnl_pct:.2f}%"
+                reason = f"Desesperación: No hizo nada interesante en {trade_duration_hours:.1f} horas. Liberando saldo con {pnl_pct:.2f}% para invertirse mejor."
             elif not is_trending and last_rsi > 65 and current_price >= last_bb_mid and pnl_pct > 0:
                 # Mean Reversion Exit: RSI alto + sobre BB media + en profit
                 signal = "sell"
-                reason = f"[RANGO] Mean Reversion Exit: RSI={last_rsi:.1f}>65, P={current_price}>=BB_mid={last_bb_mid:.2f}, P&L={pnl_pct:.2f}%"
+                reason = f"Ganancia de rango lateral asegurada: Cerramos tocando mitad con {pnl_pct:.2f}% y alto RSI ({last_rsi:.0f}). Salgamos rápido."
             elif pnl_pct > 2.5 and (last_gap < prev_gap or macd_cross_down):
                 signal = "sell"
-                reason = f"Toma de ganancias: P&L={pnl_pct:.2f}% (MACD bajista={macd_cross_down}, Gap decreciente={last_gap:.4f}<{prev_gap:.4f})"
+                reason = f"¡Felicitaciones! Cerramos Take Profit en +{pnl_pct:.2f}% cazando el tope. El MACD empezó a oler a techo."
             elif macd_cross_down and pnl_pct > 1.0:
                 signal = "sell"
-                reason = f"Venta preventiva: MACD bajista + profit {pnl_pct:.2f}%"
+                reason = f"Venta preventiva de mal tiempo: Asegurando un bonito +{pnl_pct:.2f}% porque el MACD dice que viene lluvia en ventas."
             else:
-                sl_label = f"BE:0.1%" if dynamic_stop_loss == -0.1 else f"SL:-{stop_loss}%"
-                reason = f"Hold: P&L={pnl_pct:.2f}% (Max={max_pnl_pct:.2f}%, {sl_label}, RSI={last_rsi:.1f})"
+                sl_label = f"Escudo Break-Even activo para resguardar (sale en +0.1%)" if dynamic_stop_loss == -0.1 else f"Red abajo: -{stop_loss}%"
+                reason = f"En Operación (Hold): Llevamos {pnl_pct:.2f}% al momento. Techo rozado en la carrera: +{max_pnl_pct:.2f}%. {sl_label}."
 
         confidence_val = 0.0
         if signal == "buy":
@@ -1109,28 +1130,27 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         for err in errors_this_cycle:
             user_logger.warning("  Error en ciclo: %s", err)
 
-    # Telegram: señales + resumen del ciclo
-    if signals_for_telegram:
-        lines = ["📊 <b>Señales del ciclo</b>"]
-        for s in signals_for_telegram:
-            sig_es = SIGNAL_LABEL_ES.get(s["signal"], s["signal"])
-            price_s = f" | Precio: {s['price']}" if s.get("price") else ""
-            rsi_s = f" RSI: {s['rsi']:.1f}" if s.get("rsi") is not None else ""
-            lines.append(f"• <b>{s['pair']}</b>: {sig_es.upper()} (confianza: {s['confidence']:.2f}){price_s}{rsi_s}\n  → {s.get('reason','')[:180]}")
-        await asyncio.to_thread(_send_telegram_for_user, user, "\n".join(lines))
-
-    # Resumen del ciclo
+    # Telegram: Resumen del ciclo y señales integradas en un único panel
     _profile_label = f"🌙 {risk_profile} (nocturno)" if _schedule_active else f"☀️ {risk_profile}"
-    summary_msg = (
-        f"📋 <b>Resumen del ciclo</b>\n"
-        f"🎯 Perfil: <b>{_profile_label}</b>\n"
-        f"💰 Balance inicio: {balance_summary_start}\n"
-        f"💰 Balance final: {balance_summary_end}\n"
-        f"📊 Señales: {len(signals_for_telegram)} | 📌 Órdenes: {len(orders_this_cycle)}"
-    )
+    
+    summary_lines = [
+        f"📋 <b>Resumen del Ciclo #{cycle_count}</b>",
+        f"🎯 Perfil: <b>{_profile_label}</b>",
+        f"💰 Balance neto final: {balance_summary_end}",
+        ""
+    ]
+    
+    if signals_for_telegram:
+        for s in signals_for_telegram:
+            sig_es = SIGNAL_LABEL_ES.get(s["signal"], s["signal"]).upper()
+            price_s = f" | ${s['price']}" if s.get("price") else ""
+            summary_lines.append(f"• <b>{s['pair']}</b>: <b>{sig_es}</b>{price_s}")
+            summary_lines.append(f"  💭 <i>{s.get('reason','')}</i>\n")
+            
     if errors_this_cycle:
-        summary_msg += "\n⚠️ Errores: " + "; ".join(errors_this_cycle[:5])
-    await asyncio.to_thread(_send_telegram_for_user, user, summary_msg)
+        summary_lines.append("⚠️ <b>Errores enfrentados:</b> " + "; ".join(errors_this_cycle[:5]))
+        
+    await asyncio.to_thread(_send_telegram_for_user, user, "\n".join(summary_lines))
 
     return len(orders_this_cycle), len(signals_for_telegram)
 
