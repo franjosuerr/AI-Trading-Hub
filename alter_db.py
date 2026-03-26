@@ -9,7 +9,7 @@ def alter_db():
         ("max_exposure_percent", "FLOAT DEFAULT 80.0"),
         ("cooldown_minutes", "INTEGER DEFAULT 120"),
         ("invest_percentage_ranging", "FLOAT DEFAULT 15.0"),
-        ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
+        ("risk_profile", "VARCHAR DEFAULT 'agresivo'"),
         ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
         ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
     ]

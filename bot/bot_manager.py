@@ -476,7 +476,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     trailing_activation = getattr(config, "trailing_stop_activation", 2.5)
     trailing_distance = getattr(config, "trailing_stop_distance", 0.8)
     macro_tf = getattr(config, "macro_timeframe", "1h")
-    risk_profile = getattr(config, "risk_profile", "conservador")
+    risk_profile = getattr(config, "risk_profile", "agresivo")
     use_vwap = getattr(config, "use_vwap_filter", False)
     use_daily = getattr(config, "use_daily_open_filter", False)
 
@@ -505,8 +505,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             _RISK_PRESETS = {
                 "suave": {"invest_percentage": 10.0, "invest_percentage_ranging": 5.0, "ema_fast": 12, "ema_slow": 26, "stop_loss_percent": 2.0, "trailing_stop_activation": 1.0, "trailing_stop_distance": 0.3},
                 "conservador": {"invest_percentage": 25.0, "invest_percentage_ranging": 15.0, "ema_fast": 7, "ema_slow": 30, "stop_loss_percent": 3.0, "trailing_stop_activation": 1.5, "trailing_stop_distance": 0.5},
-                "agresivo": {"invest_percentage": 50.0, "invest_percentage_ranging": 30.0, "ema_fast": 5, "ema_slow": 20, "stop_loss_percent": 4.0, "trailing_stop_activation": 2.0, "trailing_stop_distance": 1.0},
-                "muy_agresivo": {"invest_percentage": 90.0, "invest_percentage_ranging": 50.0, "ema_fast": 3, "ema_slow": 10, "stop_loss_percent": 6.0, "trailing_stop_activation": 3.0, "trailing_stop_distance": 1.5},
+                "agresivo": {"invest_percentage": 50.0, "invest_percentage_ranging": 30.0, "ema_fast": 5, "ema_slow": 20, "stop_loss_percent": 4.0, "trailing_stop_activation": 2.5, "trailing_stop_distance": 0.8},
+                "muy_agresivo": {"invest_percentage": 90.0, "invest_percentage_ranging": 50.0, "ema_fast": 3, "ema_slow": 10, "stop_loss_percent": 6.0, "trailing_stop_activation": 3.0, "trailing_stop_distance": 1.0},
             }
             preset = _RISK_PRESETS.get(schedule_profile, {})
             if preset:
@@ -678,7 +678,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             filter_vwap_pass = True if not use_vwap else (current_price > last_vwap)
             filter_daily_pass = True if not use_daily else (current_price > last_daily_open)
             filter_vol_pass = True if risk_profile in ["muy_agresivo", "agresivo"] else volume_ok
-            filter_macro_pass = True if risk_profile in ["muy_agresivo", "agresivo"] else macro_uptrend
+            filter_macro_pass = macro_uptrend # Obligatorio para todos (Incluso Agresivos) para no quemar saldo
             
             # Ajustar umbrales según perfil
             rsi_rango_threshold = 25
@@ -690,22 +690,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 # ═══ ESTRATEGIA TENDENCIAL BULL: Pullback a EMA ═══
                 strategy_name = "Trend Following - Bull"
                 is_uptrend_local = last_ema_fast > last_ema_slow
-                is_pullback = current_price is not None and current_price <= (last_ema_fast * 1.005)
+                is_pullback = current_price is not None and current_price <= (last_ema_slow * 1.002)
                 
                 if is_uptrend_local and is_pullback:
-                    if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass or not filter_vol_pass or not filter_macro_pass):
+                    if not filter_macro_pass:
+                        reason = "MERCADO ALCISTA: Compra pausada. El Filtro Macro de 1 Hora indica que no es seguro entrar aún."
+                    elif risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass or not filter_vol_pass):
                         reason = "MERCADO ALCISTA: Compra pausada por filtros intradiarios de seguridad (VWAP/Daily/Volumen)."
-                    elif risk_profile == "conservador" and (not filter_vwap_pass or not filter_macro_pass):
-                        reason = "MERCADO ALCISTA: Compra pausada, el VWAP o la macro no favorecen este perfil conservador."
+                    elif risk_profile == "conservador" and not filter_vwap_pass:
+                        reason = "MERCADO ALCISTA: Compra pausada, el VWAP no favorece este perfil conservador."
                     else:
                         signal = "buy"
-                        reason = f"MERCADO ALCISTA: ¡Comprando! El precio bajó a {current_price} rebotando justo en nuestro soporte confiable (EMA Rápida en ~{last_ema_fast:.0f})."
+                        reason = f"MERCADO ALCISTA: ¡Comprando! El precio bajó a {current_price} rebotando justo en nuestro soporte confiable (EMA Lenta en ~{last_ema_slow:.0f})."
                         amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
                 else:
                     if not is_uptrend_local:
                         reason = f"MERCADO ALCISTA: Esperando. La micro-tendencia aún no gira hacia arriba (EMA rápida de {last_ema_fast:.0f} no ha cortado)."
                     else:
-                        reason = f"MERCADO ALCISTA: Observando. Esperaré con paciencia un retroceso temporal a los ~{last_ema_fast:.0f} para cazar un buen descuento."
+                        reason = f"MERCADO ALCISTA: Observando. Esperaré un retroceso profundo temporal a los ~{last_ema_slow:.0f} (EMA Lenta) para cazar un buen descuento."
 
             elif regime == "BEAR":
                 # ═══ ESTRATEGIA BEAR: Protección o Mean Reversion Extrema ═══
@@ -781,8 +783,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             
             # Evaluar Break-Even Dinámico
             dynamic_stop_loss = stop_loss
-            if max_pnl_pct >= 1.2:
-                # Si llegó a ganar +1.2%, el Stop Loss se vuelve +0.1% (Break-Even)
+            if max_pnl_pct >= 1.5:
+                # Si llegó a ganar +1.5%, el Stop Loss se vuelve +0.1% (Break-Even)
                 dynamic_stop_loss = -0.1
 
             # Evaluar Time-Stop
@@ -829,10 +831,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 # Mean Reversion Exit: RSI alto + sobre BB media + en profit
                 signal = "sell"
                 reason = f"Ganancia de rango lateral asegurada: Cerramos tocando mitad con {pnl_pct:.2f}% y alto RSI ({last_rsi:.0f}). Salgamos rápido."
-            elif pnl_pct > 2.5 and (last_gap < prev_gap or macd_cross_down):
+            elif pnl_pct > 3.0 and (last_gap < prev_gap or macd_cross_down):
                 signal = "sell"
                 reason = f"¡Felicitaciones! Cerramos Take Profit en +{pnl_pct:.2f}% cazando el tope. El MACD empezó a oler a techo."
-            elif macd_cross_down and pnl_pct > 1.0:
+            elif macd_cross_down and pnl_pct > 1.5:
                 signal = "sell"
                 reason = f"Venta preventiva de mal tiempo: Asegurando un bonito +{pnl_pct:.2f}% porque el MACD dice que viene lluvia en ventas."
             else:

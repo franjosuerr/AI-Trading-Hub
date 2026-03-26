@@ -51,7 +51,7 @@ def auto_migrate_db():
         ("trailing_stop_distance", "FLOAT DEFAULT 0.5"),
         ("macro_timeframe", "VARCHAR DEFAULT '1h'"),
         ("log_level", "VARCHAR DEFAULT 'INFO'"),
-        ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
+        ("risk_profile", "VARCHAR DEFAULT 'agresivo'"),
         ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
         ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
         ("schedule_enabled", "BOOLEAN DEFAULT 0"),
