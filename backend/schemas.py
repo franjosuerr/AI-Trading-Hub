@@ -33,7 +33,7 @@ class UserBase(BaseModel):
     trailing_stop_activation: float = 1.5
     trailing_stop_distance: float = 0.5
     macro_timeframe: str = "1h"
-    risk_profile: str = "conservador"
+    risk_profile: str = "agresivo"
     
     use_vwap_filter: bool = False
     use_daily_open_filter: bool = False

@@ -57,7 +57,7 @@ class User(Base):
     
     # Logs / Status
     log_level = Column(String, default="INFO")
-    risk_profile = Column(String, default="conservador")
+    risk_profile = Column(String, default="agresivo")
 
     # Day Trading Intraday Filters
     use_vwap_filter = Column(Boolean, default=True)

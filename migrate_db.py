@@ -16,7 +16,7 @@ def migrate():
             ("trailing_stop_activation", "REAL DEFAULT 1.5"),
             ("trailing_stop_distance", "REAL DEFAULT 0.5"),
             ("macro_timeframe", "VARCHAR DEFAULT '1h'"),
-            ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
+            ("risk_profile", "VARCHAR DEFAULT 'agresivo'"),
             ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
             ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
         ]
