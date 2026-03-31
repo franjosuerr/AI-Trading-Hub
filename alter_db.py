@@ -12,7 +12,20 @@ def alter_db():
         ("risk_profile", "VARCHAR DEFAULT 'agresivo'"),
         ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
         ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
+        ("fee_rate", "FLOAT DEFAULT 0.1"),
     ]
+
+    # Columnas para tabla trades
+    trade_columns = [
+        ("partial_exit_done", "BOOLEAN DEFAULT 0"),
+    ]
+
+    for col_name, col_def in trade_columns:
+        try:
+            cursor.execute(f'ALTER TABLE trades ADD COLUMN {col_name} {col_def}')
+            print(f"Added trades.{col_name}")
+        except sqlite3.OperationalError as e:
+            print(f"trades.{col_name} might exist: {e}")
 
     for col_name, col_def in columns:
         try:

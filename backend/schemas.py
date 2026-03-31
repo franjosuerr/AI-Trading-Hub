@@ -42,6 +42,9 @@ class UserBase(BaseModel):
     schedule_enabled: bool = False
     schedule_start_hour: int = 22
     schedule_end_hour: int = 6
+
+    # Fee del exchange
+    fee_rate: float = 0.1
     schedule_risk_profile: str = "suave"
 
 class UserCreate(UserBase):
@@ -89,6 +92,9 @@ class UserUpdate(BaseModel):
     schedule_start_hour: Optional[int] = None
     schedule_end_hour: Optional[int] = None
     schedule_risk_profile: Optional[str] = None
+
+    # Fee del exchange
+    fee_rate: Optional[float] = None
 
 class UserResponse(UserBase):
     id: int

@@ -63,6 +63,9 @@ class User(Base):
     use_vwap_filter = Column(Boolean, default=True)
     use_daily_open_filter = Column(Boolean, default=False)
 
+    # Fee del exchange (porcentaje, 0.1 = 0.1% para CoinEx limit/maker)
+    fee_rate = Column(Float, default=0.1)
+
     # Horario Nocturno / Schedule
     schedule_enabled = Column(Boolean, default=False)
     schedule_start_hour = Column(Integer, default=22)  # 10 PM
@@ -86,5 +89,6 @@ class Trade(Base):
     simulated = Column(Boolean)
     profit = Column(Float, default=0.0) # Para registrar ganancias al cerrar (sell)
     max_price_reached = Column(Float, default=0.0) # Para Trailing Stop Loss
+    partial_exit_done = Column(Boolean, default=False) # Si ya se ejecutó venta parcial (TP1)
 
     owner = relationship("User", back_populates="trades")
