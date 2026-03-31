@@ -479,6 +479,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     risk_profile = getattr(config, "risk_profile", "agresivo")
     use_vwap = getattr(config, "use_vwap_filter", False)
     use_daily = getattr(config, "use_daily_open_filter", False)
+    fee_rate = getattr(config, "fee_rate", 0.1) / 100  # Convertir % a decimal (0.1% → 0.001)
 
     # ─── Horario Nocturno: Override de perfil de riesgo por franja horaria ───
     schedule_enabled = getattr(config, "schedule_enabled", False)
@@ -608,8 +609,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         if current_price is not None:
             user_logger.info("Precio actual (ticker) %s: %s", pair, current_price)
 
-        # 3.5. Multi-Timeframe (Macro) Check
-        macro_uptrend = True
+        # 3.5. Multi-Timeframe (Macro) Check — 3 niveles: alcista / neutral / bajista
+        macro_level = "bajista"  # default conservador
         try:
             df_macro = await asyncio.to_thread(_fetch_ohlcv, exchange, pair, macro_tf, 210, user_logger)
             if df_macro is not None and not df_macro.empty:
@@ -618,12 +619,20 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 ema200_macro = compute_ema(df_macro["close"], 200)
                 last_ema50_m = float(ema50_macro.iloc[-1])
                 last_ema200_m = float(ema200_macro.iloc[-1])
+                prev_ema50_m = float(ema50_macro.iloc[-5]) if len(ema50_macro) >= 5 else last_ema50_m
                 last_close_m = float(df_macro["close"].iloc[-1])
-                macro_uptrend = (last_close_m > last_ema200_m) and (last_ema50_m > last_ema200_m)
-                user_logger.info("Filtro Macro %s: Alcista=%s (C=%.4f, EMA50=%.4f, EMA200=%.4f)", macro_tf, macro_uptrend, last_close_m, last_ema50_m, last_ema200_m)
+                ema50_slope = (last_ema50_m - prev_ema50_m) / prev_ema50_m * 100 if prev_ema50_m > 0 else 0.0
+                if last_close_m > last_ema200_m and last_ema50_m > last_ema200_m:
+                    macro_level = "alcista"
+                elif ema50_slope > -0.05 or last_close_m > last_ema50_m:
+                    macro_level = "neutral"
+                user_logger.info("Filtro Macro %s: Nivel=%s (C=%.4f, EMA50=%.4f, EMA200=%.4f, slope=%.4f%%)",
+                                 macro_tf, macro_level, last_close_m, last_ema50_m, last_ema200_m, ema50_slope)
             else:
-                user_logger.warning("Filtro Macro %s: Sin datos, asumiendo alcista para no bloquear.", macro_tf)
+                macro_level = "neutral"
+                user_logger.warning("Filtro Macro %s: Sin datos, asumiendo neutral para no bloquear.", macro_tf)
         except Exception as e:
+            macro_level = "neutral"
             user_logger.warning("Error evaluando MTF %s: %s", macro_tf, e)
 
         # Contexto de portafolio (holdings, costo, P&L)
@@ -670,6 +679,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         amount_to_invest = 0.0
         strategy_name = ""
         free_quote_now = float(balance_effective.get(quote_currency, {}).get("free", 0.0) or 0)
+        partial_sell = False   # True = venta parcial TP1 (50%)
+        buy_trade_id = None    # ID del trade de compra abierto (para marcar partial_exit_done)
         
         if not has_open_position:
             # ─── COMPRA ───
@@ -678,13 +689,13 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             filter_vwap_pass = True if not use_vwap else (current_price > last_vwap)
             filter_daily_pass = True if not use_daily else (current_price > last_daily_open)
             filter_vol_pass = True if risk_profile in ["muy_agresivo", "agresivo"] else volume_ok
-            filter_macro_pass = macro_uptrend # Obligatorio para todos (Incluso Agresivos) para no quemar saldo
+            filter_macro_pass = macro_level in ["alcista", "neutral"]  # neutral también permite operar
             
-            # Ajustar umbrales según perfil
-            rsi_rango_threshold = 25
-            if risk_profile == "suave": rsi_rango_threshold = 20
-            elif risk_profile == "agresivo": rsi_rango_threshold = 28
-            elif risk_profile == "muy_agresivo": rsi_rango_threshold = 30
+            # Ajustar umbrales según perfil (relajados para capturar más oportunidades)
+            rsi_rango_threshold = 30  # conservador/default
+            if risk_profile == "suave": rsi_rango_threshold = 25
+            elif risk_profile == "agresivo": rsi_rango_threshold = 38
+            elif risk_profile == "muy_agresivo": rsi_rango_threshold = 42
 
             if regime == "BULL":
                 # ═══ ESTRATEGIA TENDENCIAL BULL: Pullback a EMA ═══
@@ -693,8 +704,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 is_pullback = current_price is not None and current_price <= (last_ema_slow * 1.002)
                 
                 if is_uptrend_local and is_pullback:
-                    if not filter_macro_pass:
-                        reason = "MERCADO ALCISTA: Compra pausada. El Filtro Macro de 1 Hora indica que no es seguro entrar aún."
+                    if macro_level == "bajista":
+                        reason = "MERCADO ALCISTA: Compra pausada. El Filtro Macro de 1 Hora indica tendencia bajista."
+                    elif macro_level == "neutral" and last_rsi >= 55:
+                        reason = f"MERCADO ALCISTA (macro neutral): Esperando RSI < 55 para confirmar entrada. RSI actual: {last_rsi:.0f}."
                     elif risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass or not filter_vol_pass):
                         reason = "MERCADO ALCISTA: Compra pausada por filtros intradiarios de seguridad (VWAP/Daily/Volumen)."
                     elif risk_profile == "conservador" and not filter_vwap_pass:
@@ -716,7 +729,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     reason = f"MERCADO BAJISTA: Bot en el sofá. Tu perfil '{risk_profile}' prohíbe cazar cuchillos al vuelo bajista."
                 else:
                     # En Agresivo/Muy Agresivo: busca rebote extremo
-                    rsi_rebote_extremo = 15 if risk_profile == "agresivo" else 20
+                    rsi_rebote_extremo = 30 if risk_profile == "agresivo" else 35
                     is_oversold_brutal = last_rsi < rsi_rebote_extremo
                     is_at_bb_lower = current_price is not None and current_price <= last_bb_lower
                     
@@ -731,8 +744,8 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 # ═══ ESTRATEGIA MEAN REVERSION: RSI + Bollinger ═══
                 strategy_name = "Mean Reversion - Rango"
                 is_oversold = last_rsi < rsi_rango_threshold
-                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.002
-                
+                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.01  # tolerancia 1%
+
                 if is_oversold and is_at_bb_lower:
                     if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass):
                         reason = f"MERCADO LATERAL: Bloqueado por seguridad de tu perfil (VWAP Inseguro o Daily bajo)."
@@ -741,22 +754,41 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                         reason = f"MERCADO LATERAL: ¡Comprando soporte! El precio tocó nuestro suelo del rango ({current_price}) luego de calmarse el RSI ({last_rsi:.0f})."
                         amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
                 else:
-                    distancia_fondo = (current_price - last_bb_lower) if current_price else 0
-                    reason = f"MERCADO LATERAL: Sigo dormido. Esperaré que caiga {distancia_fondo:.0f} dólares hacia suelo (~{last_bb_lower:.0f}) y se asiente el RSI (<{rsi_rango_threshold})."
+                    # Estrategia pullback: caída desde máximo reciente con RSI descendiendo
+                    recent_high = float(df["high"].iloc[-12:].max())
+                    pullback_pct = ((recent_high - current_price) / recent_high) * 100 if current_price and recent_high > 0 else 0.0
+                    rsi_prev = float(rsi_series.iloc[-2]) if len(rsi_series) >= 2 and not pd.isna(rsi_series.iloc[-2]) else 50.0
+                    rsi_falling = last_rsi < rsi_prev
+                    if (macro_level != "bajista" and risk_profile in ["agresivo", "muy_agresivo"]
+                            and 1.5 <= pullback_pct <= 5.0 and last_rsi < 45 and rsi_falling):
+                        signal = "buy"
+                        reason = f"PULLBACK LATERAL: Precio cayó {pullback_pct:.1f}% desde máximo reciente con RSI descendiendo ({last_rsi:.0f}). Comprando corrección."
+                        amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
+                    else:
+                        distancia_fondo = (current_price - last_bb_lower) if current_price else 0
+                        reason = f"MERCADO LATERAL: Sigo dormido. Esperaré que caiga {distancia_fondo:.0f} dólares hacia suelo (~{last_bb_lower:.0f}) y se asiente el RSI (<{rsi_rango_threshold})."
         else:
             # ─── VENTA (con posición abierta) ───
             avg_entry_price = portfolio_ctx.get("avg_entry_price", 0.0)
             pnl_pct = portfolio_ctx.get("pnl_pct", 0.0)
             
+            # P&L neto descontando fees (fee compra + fee venta)
+            total_fee_pct = fee_rate * 2 * 100  # en porcentaje (ej: 0.001*2*100 = 0.2%)
+            pnl_pct_net = pnl_pct - total_fee_pct
+
             # Recuperar variables para Trailing Stop, Break-Even y Time-Stop
             max_pnl_pct = 0.0
             trade_duration_hours = 0.0
+            partial_exit_done = False
+            buy_trade_id = None
             try:
                 db = SessionLocal()
                 try:
                     open_trades = db.query(Trade).filter(Trade.user_id == user.id, Trade.pair == pair, Trade.side == 'buy').order_by(Trade.timestamp.desc()).all()
                     if open_trades:
                         last_trade = open_trades[0]
+                        buy_trade_id = last_trade.id
+                        partial_exit_done = bool(last_trade.partial_exit_done)
                         # Calc max pnl
                         last_max = last_trade.max_price_reached or 0.0
                         if current_price and current_price > last_max:
@@ -787,15 +819,15 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 # Si llegó a ganar +1.5%, el Stop Loss se vuelve +0.1% (Break-Even)
                 dynamic_stop_loss = -0.1
 
-            # Evaluar Time-Stop
+            # Evaluar Time-Stop (usa P&L neto para no salir con pérdida real por fees)
             is_time_stop = False
-            if trade_duration_hours >= 6.0 and pnl_pct > -stop_loss and pnl_pct < 1.0 and not is_trending:
+            if trade_duration_hours >= 6.0 and pnl_pct_net > -stop_loss and pnl_pct_net < 1.0 and not is_trending:
                 is_time_stop = True
 
             # Evaluar Technical Stop (Pánico Estructural multi-régimen)
             is_technical_stop = False
             technical_reason = ""
-            if current_price and pnl_pct <= -1.0:
+            if current_price and pnl_pct_net <= -1.0:
                 if is_trending and current_price < last_ema_50:
                     is_technical_stop = True
                     technical_reason = f"Filtro Pánico [Tendencia]: Ruptura de EMA50 ({last_ema_50:.2f})"
@@ -812,34 +844,43 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 is_trailing_stop = True
 
             # ═══ Condiciones de venta (priorizadas) ═══
+            partial_sell = False  # True = vender solo 50% (TP1 parcial)
             if is_trailing_stop:
                 signal = "sell"
-                reason = f"Asegurador activado (Trailing Stop): Vendí al caer a {pnl_pct:.2f}% luego de rozar tu máximo de +{max_pnl_pct:.2f}%. ¡Ganancia salvada!"
+                reason = f"Asegurador activado (Trailing Stop): Vendí al caer a {pnl_pct_net:.2f}% neto luego de rozar tu máximo de +{max_pnl_pct:.2f}%. ¡Ganancia salvada!"
             elif is_technical_stop:
                 signal = "sell"
-                reason = f"Liquidación de emergencia ahorrando pérdidas: {technical_reason} | Huimos con {pnl_pct:.2f}% de pérdida esquivando tu -{stop_loss}% duro."
-            elif pnl_pct <= -dynamic_stop_loss:
+                reason = f"Liquidación de emergencia ahorrando pérdidas: {technical_reason} | Huimos con {pnl_pct_net:.2f}% neto esquivando tu -{stop_loss}% duro."
+            elif pnl_pct_net <= -dynamic_stop_loss:
                 signal = "sell"
                 if dynamic_stop_loss == -0.1:
-                    reason = f"🛡 Activé tu Break-Even en Break-Even puro: Me escapé protegiendo el trade por los pelos en {pnl_pct:.2f}%. El máximo llegó a +{max_pnl_pct:.2f}%."
+                    reason = f"Break-Even activado: Me escapé protegiendo el trade en {pnl_pct_net:.2f}% neto. El máximo llegó a +{max_pnl_pct:.2f}%."
                 else:
-                    reason = f"Stop Loss Duro Superado: Amputando la herida de un tirón para salvar saldo. (P&L: {pnl_pct:.2f}% <= -{stop_loss}%)"
+                    reason = f"Stop Loss Duro Superado: Amputando la herida de un tirón para salvar saldo. (P&L neto: {pnl_pct_net:.2f}% <= -{stop_loss}%)"
             elif is_time_stop:
                 signal = "sell"
-                reason = f"Desesperación: No hizo nada interesante en {trade_duration_hours:.1f} horas. Liberando saldo con {pnl_pct:.2f}% para invertirse mejor."
-            elif not is_trending and last_rsi > 65 and current_price >= last_bb_mid and pnl_pct > 0:
-                # Mean Reversion Exit: RSI alto + sobre BB media + en profit
+                reason = f"Desesperación: No hizo nada interesante en {trade_duration_hours:.1f} horas. Liberando saldo con {pnl_pct_net:.2f}% neto para invertirse mejor."
+            elif not is_trending and last_rsi > 65 and current_price >= last_bb_mid and pnl_pct_net > 0:
+                # Mean Reversion Exit: RSI alto + sobre BB media + en profit neto
                 signal = "sell"
-                reason = f"Ganancia de rango lateral asegurada: Cerramos tocando mitad con {pnl_pct:.2f}% y alto RSI ({last_rsi:.0f}). Salgamos rápido."
-            elif pnl_pct > 3.0 and (last_gap < prev_gap or macd_cross_down):
+                if not partial_exit_done:
+                    partial_sell = True  # TP1: vender 50%, dejar 50% correr con trailing
+                    reason = f"TP1 parcial (50%): RSI alto ({last_rsi:.0f}) tocando banda media con {pnl_pct_net:.2f}% neto. Asegurando mitad, dejando correr el resto."
+                else:
+                    reason = f"Ganancia de rango lateral asegurada (TP2 100%): {pnl_pct_net:.2f}% neto y RSI alto ({last_rsi:.0f}). Salgamos rápido."
+            elif pnl_pct_net > 3.0 and (last_gap < prev_gap or macd_cross_down):
                 signal = "sell"
-                reason = f"¡Felicitaciones! Cerramos Take Profit en +{pnl_pct:.2f}% cazando el tope. El MACD empezó a oler a techo."
-            elif macd_cross_down and pnl_pct > 1.5:
+                if not partial_exit_done:
+                    partial_sell = True
+                    reason = f"TP1 parcial (50%): Take Profit +{pnl_pct_net:.2f}% neto cazando el tope. Asegurando mitad."
+                else:
+                    reason = f"¡Felicitaciones! Cerramos Take Profit en +{pnl_pct_net:.2f}% neto cazando el tope. El MACD empezó a oler a techo."
+            elif macd_cross_down and pnl_pct_net > 1.5:
                 signal = "sell"
-                reason = f"Venta preventiva de mal tiempo: Asegurando un bonito +{pnl_pct:.2f}% porque el MACD dice que viene lluvia en ventas."
+                reason = f"Venta preventiva de mal tiempo: Asegurando un bonito +{pnl_pct_net:.2f}% neto porque el MACD dice que viene lluvia en ventas."
             else:
                 sl_label = f"Escudo Break-Even activo para resguardar (sale en +0.1%)" if dynamic_stop_loss == -0.1 else f"Red abajo: -{stop_loss}%"
-                reason = f"En Operación (Hold): Llevamos {pnl_pct:.2f}% al momento. Techo rozado en la carrera: +{max_pnl_pct:.2f}%. {sl_label}."
+                reason = f"En Operación (Hold): Llevamos {pnl_pct_net:.2f}% neto al momento. Techo rozado en la carrera: +{max_pnl_pct:.2f}%. {sl_label}."
 
         confidence_val = 0.0
         if signal == "buy":
@@ -861,7 +902,9 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             "confidence": confidence_val,
             "reason": reason,
             "amount_usdt": amount_to_invest,
-            "sell_percentage": 100.0
+            "sell_percentage": 50.0 if partial_sell else 100.0,
+            "partial_sell": partial_sell,
+            "buy_trade_id": buy_trade_id if has_open_position else None,
         }
 
         # Guardar señal en historial para contexto futuro
@@ -1078,6 +1121,17 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     db.add(new_trade)
                     db.commit()
                     user_logger.info("Trade guardado en DB: %s %s %.8f @ %.6f", signal_data["signal"], pair, trade_amount, trade_price)
+
+                    # Marcar partial_exit_done en la compra original si fue venta parcial TP1
+                    if signal_data.get("partial_sell") and signal_data.get("buy_trade_id"):
+                        try:
+                            orig_trade = db.query(Trade).filter(Trade.id == signal_data["buy_trade_id"]).first()
+                            if orig_trade:
+                                orig_trade.partial_exit_done = True
+                                db.commit()
+                                user_logger.info("TP1 parcial marcado en trade #%d. El 50%% restante seguirá con trailing stop.", signal_data["buy_trade_id"])
+                        except Exception as e_partial:
+                            user_logger.warning("Error marcando partial_exit_done: %s", str(e_partial)[:100])
                 finally:
                     db.close()
             except Exception as e:
