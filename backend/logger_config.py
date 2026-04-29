@@ -4,9 +4,13 @@ import glob
 import time
 from datetime import datetime, timedelta, timezone
 from logging.handlers import TimedRotatingFileHandler
+from threading import Lock
 
 LOG_DIR = "logs"
 BOT_LOG_DIR = os.path.join(LOG_DIR, "bots")
+ANALYSIS_LOG_DIR = os.path.join(LOG_DIR, "analysis")
+
+_analysis_lock = Lock()
 
 def colombia_converter(timestamp):
     """Convierte un timestamp a hora de Colombia (UTC-5)."""
@@ -34,6 +38,7 @@ def _ensure_dirs():
     """Crea directorios de logs si no existen."""
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(BOT_LOG_DIR, exist_ok=True)
+    os.makedirs(ANALYSIS_LOG_DIR, exist_ok=True)
 
 
 def _create_daily_handler(filepath, backup_days=90):
@@ -136,7 +141,79 @@ def cleanup_old_logs(max_days=30):
             except Exception:
                 pass
 
+    # Para logs analíticos por usuario (fichero único), purga por líneas.
+    try:
+        for filename in os.listdir(ANALYSIS_LOG_DIR):
+            if filename.endswith("_analysis.log"):
+                _purge_analysis_log_older_than(os.path.join(ANALYSIS_LOG_DIR, filename), max_days=max_days)
+    except Exception:
+        pass
+
 
 def get_logger(name: str):
     """Acceso rápido a un logger estándar."""
     return logging.getLogger(name)
+
+
+def _parse_log_datetime(line: str):
+    """Parsea timestamps al inicio de línea con formato [YYYY-MM-DD HH:MM:SS]."""
+    try:
+        if not line.startswith("["):
+            return None
+        close_idx = line.find("]")
+        if close_idx <= 1:
+            return None
+        raw = line[1:close_idx]
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _purge_analysis_log_older_than(filepath: str, max_days: int = 90):
+    """Mantiene un solo fichero por usuario, eliminando líneas con más de max_days días."""
+    if not os.path.exists(filepath):
+        return
+
+    cutoff = datetime.utcnow() - timedelta(hours=5) - timedelta(days=max_days)
+
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return
+
+    kept = []
+    for line in lines:
+        dt = _parse_log_datetime(line)
+        if dt is None or dt >= cutoff:
+            kept.append(line)
+
+    if len(kept) != len(lines):
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.writelines(kept)
+        except Exception:
+            return
+
+
+def append_user_analysis_log(user_id: int, username: str, section: str, message: str):
+    """
+    Escribe contexto detallado para agentes de mejora en un único fichero por usuario.
+    Archivo: logs/analysis/user_{id}_analysis.log
+    """
+    _ensure_dirs()
+    filepath = os.path.join(ANALYSIS_LOG_DIR, f"user_{user_id}_analysis.log")
+
+    now_col = datetime.utcnow() - timedelta(hours=5)
+    ts = now_col.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] [user_{user_id}:{username}] [{section}] {message}\n"
+
+    with _analysis_lock:
+        _purge_analysis_log_older_than(filepath, max_days=90)
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(line)
+
+
+def get_user_analysis_log_path(user_id: int) -> str:
+    _ensure_dirs()
+    return os.path.join(ANALYSIS_LOG_DIR, f"user_{user_id}_analysis.log")

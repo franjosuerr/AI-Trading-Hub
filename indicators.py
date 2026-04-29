@@ -143,6 +143,61 @@ def compute_daily_open(df: pd.DataFrame) -> pd.Series:
     return daily_open
 
 
+def compute_donchian_channels(
+    high: pd.Series, low: pd.Series, period: int = 20
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Canales de Donchian: (upper, middle, lower)."""
+    upper = high.rolling(window=period, min_periods=1).max()
+    lower = low.rolling(window=period, min_periods=1).min()
+    middle = (upper + lower) / 2.0
+    return upper, middle, lower
+
+
+def compute_fibonacci_retracement_levels(
+    high: pd.Series, low: pd.Series, lookback: int = 55
+) -> dict[str, pd.Series]:
+    """Niveles de Fibonacci dinámicos sobre swing high/low del lookback."""
+    swing_high = high.rolling(window=lookback, min_periods=1).max()
+    swing_low = low.rolling(window=lookback, min_periods=1).min()
+    diff = (swing_high - swing_low).replace(0, 1e-10)
+
+    level_236 = swing_high - (diff * 0.236)
+    level_382 = swing_high - (diff * 0.382)
+    level_500 = swing_high - (diff * 0.500)
+    level_618 = swing_high - (diff * 0.618)
+    level_786 = swing_high - (diff * 0.786)
+
+    return {
+        "swing_high": swing_high,
+        "swing_low": swing_low,
+        "fib_236": level_236,
+        "fib_382": level_382,
+        "fib_500": level_500,
+        "fib_618": level_618,
+        "fib_786": level_786,
+    }
+
+
+def compute_volume_balance(
+    close: pd.Series, volume: pd.Series, period: int = 20
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Balanceo de volumen por dirección de vela.
+    Retorna: (buy_volume_avg, sell_volume_avg, buy_sell_ratio).
+    """
+    prev_close = close.shift(1)
+    up_mask = close >= prev_close
+    down_mask = close < prev_close
+
+    buy_volume = volume.where(up_mask, 0.0)
+    sell_volume = volume.where(down_mask, 0.0)
+
+    buy_avg = buy_volume.rolling(window=period, min_periods=1).mean()
+    sell_avg = sell_volume.rolling(window=period, min_periods=1).mean()
+    ratio = buy_avg / sell_avg.replace(0, 1e-10)
+    return buy_avg, sell_avg, ratio
+
+
 def compute_all_indicators(df: pd.DataFrame) -> dict:
     """
     Dado un DataFrame con columnas: open, high, low, close, volume (y opcional timestamp),
@@ -161,6 +216,9 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     ema200 = compute_ema(close, 200)
     bb_upper, bb_mid, bb_lower = compute_bollinger_bands(close, 20, 2.0)
     vol_avg = compute_volume_avg(volume, 20)
+    donch_upper, donch_mid, donch_lower = compute_donchian_channels(df["high"], df["low"], 20)
+    fib_levels = compute_fibonacci_retracement_levels(df["high"], df["low"], 55)
+    _, _, vol_balance_ratio = compute_volume_balance(close, volume, 20)
     
     vwap = compute_vwap(df)
     daily_open = compute_daily_open(df)
@@ -185,6 +243,13 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     last_volume = _last(volume)
     last_vwap = _last(vwap)
     last_daily_open = _last(daily_open)
+    last_donch_upper = _last(donch_upper)
+    last_donch_mid = _last(donch_mid)
+    last_donch_lower = _last(donch_lower)
+    last_fib_382 = _last(fib_levels["fib_382"])
+    last_fib_500 = _last(fib_levels["fib_500"])
+    last_fib_618 = _last(fib_levels["fib_618"])
+    last_volume_balance = _last(vol_balance_ratio)
 
     return {
         "rsi": last_rsi,
@@ -199,6 +264,13 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
         "volume_avg": last_vol_avg,
         "vwap": last_vwap,
         "daily_open": last_daily_open,
+        "donchian_upper": last_donch_upper,
+        "donchian_mid": last_donch_mid,
+        "donchian_lower": last_donch_lower,
+        "fib_382": last_fib_382,
+        "fib_500": last_fib_500,
+        "fib_618": last_fib_618,
+        "volume_balance_ratio": last_volume_balance,
     }
 
 
@@ -216,6 +288,9 @@ def get_indicators_series(df: pd.DataFrame) -> dict:
     ema200 = compute_ema(close, 200)
     bb_upper, bb_mid, bb_lower = compute_bollinger_bands(close, 20, 2.0)
     vol_avg = compute_volume_avg(volume, 20)
+    donch_upper, donch_mid, donch_lower = compute_donchian_channels(df["high"], df["low"], 20)
+    fib_levels = compute_fibonacci_retracement_levels(df["high"], df["low"], 55)
+    vol_buy, vol_sell, vol_balance_ratio = compute_volume_balance(close, volume, 20)
     return {
         "rsi": rsi,
         "macd_line": macd_line,
@@ -226,4 +301,13 @@ def get_indicators_series(df: pd.DataFrame) -> dict:
         "bb_upper": bb_upper,
         "bb_lower": bb_lower,
         "volume_avg": vol_avg,
+        "donchian_upper": donch_upper,
+        "donchian_mid": donch_mid,
+        "donchian_lower": donch_lower,
+        "fib_382": fib_levels["fib_382"],
+        "fib_500": fib_levels["fib_500"],
+        "fib_618": fib_levels["fib_618"],
+        "volume_buy_avg": vol_buy,
+        "volume_sell_avg": vol_sell,
+        "volume_balance_ratio": vol_balance_ratio,
     }

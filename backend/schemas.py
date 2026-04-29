@@ -14,28 +14,28 @@ class UserBase(BaseModel):
     timeframe: str = "15m"
     interval: int = 300
     test_mode: bool = False
-    pairs: str = "SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT"
+    pairs: str = "BTC/USDT,ETH/USDT,SOL/USDT"
     candle_count: int = 350
     stop_loss_percent: float = 3.0
-    max_trades_per_day: int = 5
+    max_trades_per_day: int = 4
     pair_delay: int = 2
-    max_exposure_percent: float = 80.0
-    cooldown_minutes: int = 120
+    max_exposure_percent: float = 40.0
+    cooldown_minutes: int = 180
     log_level: str = "INFO"
     
     ema_fast: int = 7
     ema_slow: int = 30
     adx_period: int = 14
-    adx_threshold: int = 25
-    invest_percentage: float = 25.0
-    invest_percentage_ranging: float = 15.0
+    adx_threshold: int = 28
+    invest_percentage: float = 10.0
+    invest_percentage_ranging: float = 10.0
     
-    trailing_stop_activation: float = 1.5
-    trailing_stop_distance: float = 0.5
+    trailing_stop_activation: float = 2.5
+    trailing_stop_distance: float = 0.55
     macro_timeframe: str = "1h"
-    risk_profile: str = "agresivo"
+    risk_profile: str = "conservador"
     
-    use_vwap_filter: bool = False
+    use_vwap_filter: bool = True
     use_daily_open_filter: bool = False
 
     # Horario Nocturno
