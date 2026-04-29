@@ -907,6 +907,24 @@ function Dashboard({ userRole, userId, username, onLogout }) {
     }
   };
 
+  const downloadAnalysisLog = async (uid, uname) => {
+    try {
+      const res = await api.get(`/logs/bot/${uid}/analysis/download`, { responseType: 'blob' });
+      const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+      const today = `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}-${p.find(x => x.type === 'day').value}`;
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'text/plain' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bot_${uname}_${today}_analysis.log`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      alert(error.response?.status === 404 ? 'No hay log analítico disponible todavía' : 'Error al descargar log analítico');
+    }
+  };
+
   return (
     <div>
       {/* ─── Top Bar ─── */}
@@ -1004,6 +1022,7 @@ function Dashboard({ userRole, userId, username, onLogout }) {
               <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                 <button onClick={() => { setStatsUserId(user.id); setStatsUserName(user.username); }} className="btn-action" style={{ flex: 1, color: '#00f2ff', borderColor: 'rgba(0,242,255,0.15)', justifyContent: 'center' }}><BarChart3 size={14} /> Stats</button>
                 <button onClick={() => downloadLog(user.id, user.username)} className="btn-action" style={{ flex: 1, color: '#ffaa00', borderColor: 'rgba(255,170,0,0.15)', justifyContent: 'center' }}><Download size={14} /> Logs</button>
+                <button onClick={() => downloadAnalysisLog(user.id, user.username)} className="btn-action" style={{ flex: 1, color: '#7fd4ff', borderColor: 'rgba(127,212,255,0.20)', justifyContent: 'center' }}><Download size={14} /> AI Log</button>
                 <button onClick={() => handleOpenConfigModal(user)} className="btn-action" style={{ flex: 1, color: '#9d00ff', borderColor: 'rgba(157,0,255,0.15)', justifyContent: 'center' }}><Settings size={14} /> Config</button>
               </div>
 

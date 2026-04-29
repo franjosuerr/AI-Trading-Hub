@@ -1,0 +1,26 @@
+RESUMEN DE ESTRATEGIA: Evaluación de Enero 2025 (Tendencia y Rango)
+================================================================================
+
+🪙 BTCUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:     -2.67% | Win Rate:  43.8% | Trades:  16 | Final: $64.23
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -2.16% | Win Rate:  46.2% | Trades:  26 | Final: $64.58
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -0.63% | Win Rate:  48.7% | Trades:  39 | Final: $65.58
+
+🪙 ETHUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:     -2.99% | Win Rate:  30.8% | Trades:  13 | Final: $64.03
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -6.01% | Win Rate:  39.1% | Trades:  23 | Final: $62.03
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -7.50% | Win Rate:  42.5% | Trades:  40 | Final: $61.05
+
+🪙 SOLUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:     -0.70% | Win Rate:  59.1% | Trades:  22 | Final: $65.54
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -2.80% | Win Rate:  50.0% | Trades:  30 | Final: $64.15
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -2.35% | Win Rate:  56.5% | Trades:  46 | Final: $64.45

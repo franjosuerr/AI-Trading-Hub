@@ -6,11 +6,11 @@ def alter_db():
     cursor = conn.cursor()
 
     columns = [
-        ("max_exposure_percent", "FLOAT DEFAULT 80.0"),
-        ("cooldown_minutes", "INTEGER DEFAULT 120"),
-        ("invest_percentage_ranging", "FLOAT DEFAULT 15.0"),
-        ("risk_profile", "VARCHAR DEFAULT 'agresivo'"),
-        ("use_vwap_filter", "BOOLEAN DEFAULT 0"),
+        ("max_exposure_percent", "FLOAT DEFAULT 40.0"),
+        ("cooldown_minutes", "INTEGER DEFAULT 180"),
+        ("invest_percentage_ranging", "FLOAT DEFAULT 10.0"),
+        ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
+        ("use_vwap_filter", "BOOLEAN DEFAULT 1"),
         ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
         ("fee_rate", "FLOAT DEFAULT 0.1"),
     ]

@@ -31,7 +31,7 @@ from email_notifier import send_trade_email
 # Backend
 from backend.database import SessionLocal
 from backend.models.models import User, Trade
-from backend.logger_config import get_logger, get_user_bot_logger
+from backend.logger_config import get_logger, get_user_bot_logger, append_user_analysis_log
 
 logger = get_logger("bot_manager")
 
@@ -527,6 +527,12 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     cycle_start = get_colombia_time().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
 
+    def _emit_analysis(section: str, message: str):
+        try:
+            append_user_analysis_log(user.id, user.username, section, message)
+        except Exception as e:
+            user_logger.warning("No se pudo escribir log analítico: %s", str(e)[:150])
+
     # Balance al inicio
     balance_start = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
     _log_balance_full(user_logger, balance_start, "Balance al inicio del ciclo")
@@ -536,6 +542,16 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     balance_effective = _get_effective_balance(user.id, balance_start, test_mode)
     if test_mode:
         user_logger.info("Balance virtual: %s", _format_balance_one_line(balance_effective))
+
+    _emit_analysis(
+        "CYCLE_START",
+        (
+            f"cycle={cycle_count} test_mode={test_mode} timeframe={timeframe} pairs={','.join(pairs)} "
+            f"risk_profile={risk_profile} adx_th={adx_thresh} invest_t={invest_pct_trending} invest_r={invest_pct_ranging} "
+            f"trailing_act={trailing_activation} trailing_dist={trailing_distance} use_vwap={use_vwap} use_daily={use_daily} "
+            f"macro_tf={macro_tf} balance_start={balance_summary_start}"
+        ),
+    )
 
     signals_for_telegram = []
     orders_this_cycle = []
@@ -561,7 +577,19 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         )
 
         # 2. Indicadores técnicos
-        from indicators import compute_ema, compute_adx, compute_bollinger_bands, compute_rsi, compute_volume_avg, compute_macd, compute_vwap, compute_daily_open
+        from indicators import (
+            compute_ema,
+            compute_adx,
+            compute_bollinger_bands,
+            compute_rsi,
+            compute_volume_avg,
+            compute_macd,
+            compute_vwap,
+            compute_daily_open,
+            compute_donchian_channels,
+            compute_fibonacci_retracement_levels,
+            compute_volume_balance,
+        )
         ema_fast = compute_ema(df["close"], ema_fast_len)
         ema_slow = compute_ema(df["close"], ema_slow_len)
         ema_50 = compute_ema(df["close"], 50)
@@ -573,6 +601,9 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         macd_line, macd_signal, _ = compute_macd(df["close"])
         vwap_series = compute_vwap(df)
         daily_open_series = compute_daily_open(df)
+        donch_upper, donch_mid, donch_lower = compute_donchian_channels(df["high"], df["low"], 20)
+        fib_levels = compute_fibonacci_retracement_levels(df["high"], df["low"], 55)
+        vol_buy_avg_s, vol_sell_avg_s, vol_balance_ratio_s = compute_volume_balance(df["close"], df["volume"], 20)
 
         last_rsi = float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0
         last_bb_upper = float(bb_upper.iloc[-1])
@@ -583,6 +614,15 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         last_vol_avg = float(vol_avg_series.iloc[-1]) if not pd.isna(vol_avg_series.iloc[-1]) else 0
         last_vwap = float(vwap_series.iloc[-1]) if not pd.isna(vwap_series.iloc[-1]) else 0.0
         last_daily_open = float(daily_open_series.iloc[-1]) if not pd.isna(daily_open_series.iloc[-1]) else 0.0
+        last_donch_upper = float(donch_upper.iloc[-1])
+        last_donch_mid = float(donch_mid.iloc[-1])
+        last_donch_lower = float(donch_lower.iloc[-1])
+        last_fib_382 = float(fib_levels["fib_382"].iloc[-1])
+        last_fib_500 = float(fib_levels["fib_500"].iloc[-1])
+        last_fib_618 = float(fib_levels["fib_618"].iloc[-1])
+        last_vol_buy_avg = float(vol_buy_avg_s.iloc[-1]) if not pd.isna(vol_buy_avg_s.iloc[-1]) else 0.0
+        last_vol_sell_avg = float(vol_sell_avg_s.iloc[-1]) if not pd.isna(vol_sell_avg_s.iloc[-1]) else 0.0
+        last_vol_balance = float(vol_balance_ratio_s.iloc[-1]) if not pd.isna(vol_balance_ratio_s.iloc[-1]) else 1.0
 
         current_price = await asyncio.to_thread(_fetch_ticker_price, exchange, pair, user_logger)
         
@@ -590,19 +630,27 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
         indicators_dict = {
             "macd_line": float(macd_line.iloc[-1]) if not pd.isna(macd_line.iloc[-1]) else 0.0,
             "macd_signal": float(macd_signal.iloc[-1]) if not pd.isna(macd_signal.iloc[-1]) else 0.0,
+            "volume_balance_ratio": last_vol_balance,
+            "fib_382": last_fib_382,
+            "fib_500": last_fib_500,
+            "fib_618": last_fib_618,
         }
 
         price_above_ema200 = (current_price > last_ema_200) if current_price else True
         volume_ok = (last_volume > last_vol_avg)
+        volume_balance_bullish = last_vol_balance >= 1.05
                 
         user_logger.info(
-            "Últimos indicadores - RSI: %.1f | MACD: %.4f | ADX: %.1f | BB(L,M,U): %.2f, %.2f, %.2f | EMA200: %.2f | VOL:%s(avg=%.0f) | VWAP:%.2f | DailyOpen:%.2f",
+            "Últimos indicadores - RSI: %.1f | MACD: %.4f | ADX: %.1f | BB(L,M,U): %.2f, %.2f, %.2f | Donch(L,M,U): %.2f, %.2f, %.2f | Fib(38/50/61): %.2f/%.2f/%.2f | EMA200: %.2f | VOL:%s(avg=%.0f) | VolBal:%.2f (buy=%.0f sell=%.0f) | VWAP:%.2f | DailyOpen:%.2f",
             last_rsi,
             indicators_dict.get("macd_line") or 0,
             float(adx.iloc[-1]),
             last_bb_lower, last_bb_mid, last_bb_upper,
+            last_donch_lower, last_donch_mid, last_donch_upper,
+            last_fib_382, last_fib_500, last_fib_618,
             last_ema_200,
             "OK" if volume_ok else "BAJO", last_vol_avg,
+            last_vol_balance, last_vol_buy_avg, last_vol_sell_avg,
             last_vwap, last_daily_open
         )
 
@@ -702,6 +750,9 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 strategy_name = "Trend Following - Bull"
                 is_uptrend_local = last_ema_fast > last_ema_slow
                 is_pullback = current_price is not None and current_price <= (last_ema_slow * 1.002)
+                in_fib_buy_zone = current_price is not None and (last_fib_618 <= current_price <= last_fib_382)
+                near_donch_support = current_price is not None and current_price <= (last_donch_mid * 1.003)
+                rsi_ok_for_trend = 35 <= last_rsi <= 62
                 
                 if is_uptrend_local and is_pullback:
                     if macro_level == "bajista":
@@ -713,9 +764,30 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     elif risk_profile == "conservador" and not filter_vwap_pass:
                         reason = "MERCADO ALCISTA: Compra pausada, el VWAP no favorece este perfil conservador."
                     else:
-                        signal = "buy"
-                        reason = f"MERCADO ALCISTA: ¡Comprando! El precio bajó a {current_price} rebotando justo en nuestro soporte confiable (EMA Lenta en ~{last_ema_slow:.0f})."
-                        amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
+                        confirmations = 0
+                        if in_fib_buy_zone:
+                            confirmations += 1
+                        if near_donch_support:
+                            confirmations += 1
+                        if volume_balance_bullish:
+                            confirmations += 1
+                        if rsi_ok_for_trend:
+                            confirmations += 1
+                        if volume_ok:
+                            confirmations += 1
+
+                        if confirmations >= 3:
+                            signal = "buy"
+                            reason = (
+                                f"MERCADO ALCISTA: Compra por pullback confirmado ({confirmations}/5). "
+                                f"Soporte EMA/Fibo/Donchian con balance de volumen favorable ({last_vol_balance:.2f})."
+                            )
+                            amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
+                        else:
+                            reason = (
+                                f"MERCADO ALCISTA: Pullback incompleto ({confirmations}/5 confirmaciones). "
+                                f"Espero mejor alineación de Fibo/Donchian/volumen para comprar más barato."
+                            )
                 else:
                     if not is_uptrend_local:
                         reason = f"MERCADO ALCISTA: Esperando. La micro-tendencia aún no gira hacia arriba (EMA rápida de {last_ema_fast:.0f} no ha cortado)."
@@ -732,26 +804,56 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     rsi_rebote_extremo = 30 if risk_profile == "agresivo" else 35
                     is_oversold_brutal = last_rsi < rsi_rebote_extremo
                     is_at_bb_lower = current_price is not None and current_price <= last_bb_lower
+                    is_at_donch_floor = current_price is not None and current_price <= (last_donch_lower * 1.002)
+                    is_deep_fib = current_price is not None and current_price <= last_fib_618
+                    momentum_recovery = indicators_dict.get("macd_line", 0) >= indicators_dict.get("macd_signal", 0)
                     
-                    if is_oversold_brutal and is_at_bb_lower:
+                    bear_confirmations = sum([
+                        1 if is_oversold_brutal else 0,
+                        1 if is_at_bb_lower else 0,
+                        1 if is_at_donch_floor else 0,
+                        1 if is_deep_fib else 0,
+                        1 if volume_balance_bullish else 0,
+                        1 if momentum_recovery else 0,
+                    ])
+
+                    if bear_confirmations >= 5:
                         signal = "buy"
-                        reason = f"MERCADO BAJISTA: ¡Comprando rebote violento! Todo está en pánico extremo (RSI={last_rsi:.0f}) tocando nuestro fondo absoluto ({last_bb_lower:.0f})."
-                        amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
+                        reason = (
+                            f"MERCADO BAJISTA: Rebote extremo validado ({bear_confirmations}/6). "
+                            f"Entrada pequeña y selectiva en sobreventa con mejora de flujo de volumen."
+                        )
+                        amount_to_invest = free_quote_now * ((invest_pct_trending * 0.5) / 100.0)
                     else:
-                        reason = f"MERCADO BAJISTA: Absteniéndose. No voy a comprar hasta ver pánico ciego (RSI debajo de {rsi_rebote_extremo}) en el suelo de ~{last_bb_lower:.0f}. RSI actual: {last_rsi:.0f}."
+                        reason = (
+                            f"MERCADO BAJISTA: Absteniéndose ({bear_confirmations}/6). "
+                            f"Exijo capitulación real + confirmación de volumen antes de intentar rebote."
+                        )
 
             elif regime == "RANGO":
                 # ═══ ESTRATEGIA MEAN REVERSION: RSI + Bollinger ═══
                 strategy_name = "Mean Reversion - Rango"
                 is_oversold = last_rsi < rsi_rango_threshold
-                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.01  # tolerancia 1%
-
-                if is_oversold and is_at_bb_lower:
+                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower * 1.002
+                is_near_donch_floor = current_price is not None and current_price <= (last_donch_lower * 1.003)
+                is_near_fib_discount = current_price is not None and current_price <= last_fib_618
+                range_confirmations = sum([
+                    1 if is_oversold else 0,
+                    1 if is_at_bb_lower else 0,
+                    1 if is_near_donch_floor else 0,
+                    1 if is_near_fib_discount else 0,
+                    1 if volume_balance_bullish else 0,
+                ])
+                
+                if range_confirmations >= 4:
                     if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass):
                         reason = f"MERCADO LATERAL: Bloqueado por seguridad de tu perfil (VWAP Inseguro o Daily bajo)."
                     else:
                         signal = "buy"
-                        reason = f"MERCADO LATERAL: ¡Comprando soporte! El precio tocó nuestro suelo del rango ({current_price}) luego de calmarse el RSI ({last_rsi:.0f})."
+                        reason = (
+                            f"MERCADO LATERAL: Compra de descuento ({range_confirmations}/5). "
+                            f"Confluencia BB+Donchian+Fibo con balance de volumen comprador."
+                        )
                         amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
                 else:
                     # Estrategia pullback: caída desde máximo reciente con RSI descendiendo
@@ -766,7 +868,10 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                         amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
                     else:
                         distancia_fondo = (current_price - last_bb_lower) if current_price else 0
-                        reason = f"MERCADO LATERAL: Sigo dormido. Esperaré que caiga {distancia_fondo:.0f} dólares hacia suelo (~{last_bb_lower:.0f}) y se asiente el RSI (<{rsi_rango_threshold})."
+                        reason = (
+                            f"MERCADO LATERAL: Sigo dormido ({range_confirmations}/5). "
+                            f"Esperaré mejor descuento ({distancia_fondo:.0f} hacia BB inferior) y confirmación de flujo comprador."
+                        )
         else:
             # ─── VENTA (con posición abierta) ───
             avg_entry_price = portfolio_ctx.get("avg_entry_price", 0.0)
@@ -868,6 +973,12 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     reason = f"TP1 parcial (50%): RSI alto ({last_rsi:.0f}) tocando banda media con {pnl_pct_net:.2f}% neto. Asegurando mitad, dejando correr el resto."
                 else:
                     reason = f"Ganancia de rango lateral asegurada (TP2 100%): {pnl_pct_net:.2f}% neto y RSI alto ({last_rsi:.0f}). Salgamos rápido."
+            elif not is_trending and current_price >= last_donch_mid and current_price >= last_fib_382 and pnl_pct_net > 0.4:
+                signal = "sell"
+                reason = (
+                    f"Take profit de rango por confluencia Donchian+Fibo: "
+                    f"precio recuperó zona media/alta con {pnl_pct_net:.2f}% neto."
+                )
             elif pnl_pct_net > 3.0 and (last_gap < prev_gap or macd_cross_down):
                 signal = "sell"
                 if not partial_exit_done:
@@ -878,6 +989,12 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             elif macd_cross_down and pnl_pct_net > 1.5:
                 signal = "sell"
                 reason = f"Venta preventiva de mal tiempo: Asegurando un bonito +{pnl_pct_net:.2f}% neto porque el MACD dice que viene lluvia en ventas."
+            elif pnl_pct_net > 2.0 and current_price >= last_donch_upper and last_vol_balance < 0.95:
+                signal = "sell"
+                reason = (
+                    f"Salida de distribución: precio en techo Donchian con debilidad de volumen comprador "
+                    f"(balance={last_vol_balance:.2f}), asegurando +{pnl_pct_net:.2f}% neto."
+                )
             else:
                 sl_label = f"Escudo Break-Even activo para resguardar (sale en +0.1%)" if dynamic_stop_loss == -0.1 else f"Red abajo: -{stop_loss}%"
                 reason = f"En Operación (Hold): Llevamos {pnl_pct_net:.2f}% neto al momento. Techo rozado en la carrera: +{max_pnl_pct:.2f}%. {sl_label}."
@@ -924,6 +1041,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             signal_data["confidence"], signal_data["reason"]
         )
 
+        _emit_analysis(
+            "PAIR_DECISION",
+            (
+                f"pair={pair} regime={regime} strategy={strategy_name or 'n/a'} signal={signal_data['signal']} "
+                f"confidence={signal_data['confidence']:.2f} reason={signal_data['reason']} "
+                f"price={current_price} rsi={last_rsi:.2f} adx={last_adx:.2f} "
+                f"ema_fast={last_ema_fast:.4f} ema_slow={last_ema_slow:.4f} ema200={last_ema_200:.4f} "
+                f"bb_l={last_bb_lower:.4f} bb_m={last_bb_mid:.4f} bb_u={last_bb_upper:.4f} "
+                f"donch_l={last_donch_lower:.4f} donch_m={last_donch_mid:.4f} donch_u={last_donch_upper:.4f} "
+                f"fib382={last_fib_382:.4f} fib500={last_fib_500:.4f} fib618={last_fib_618:.4f} "
+                f"vol={last_volume:.4f} vol_avg={last_vol_avg:.4f} vol_balance={last_vol_balance:.4f} "
+                f"vwap={last_vwap:.4f} daily_open={last_daily_open:.4f} macro_uptrend={macro_uptrend} "
+                f"holdings={portfolio_ctx.get('holdings', 0.0):.8f} avg_entry={portfolio_ctx.get('avg_entry_price', 0.0):.6f} "
+                f"pnl_pct={portfolio_ctx.get('pnl_pct', 0.0):.4f} pnl_usdt={portfolio_ctx.get('pnl_usdt', 0.0):.4f} "
+                f"history_buys={portfolio_ctx.get('total_trades_buy', 0)} history_sells={portfolio_ctx.get('total_trades_sell', 0)}"
+            ),
+        )
+
         # Datos para Telegram
         signals_for_telegram.append({
             "pair": pair, "signal": signal_data["signal"],
@@ -934,15 +1069,20 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             "ema_fast": last_ema_fast, "ema_slow": last_ema_slow, "adx": last_adx,
             "regime": regime, "rsi": last_rsi,
             "bb_upper": last_bb_upper, "bb_mid": last_bb_mid, "bb_lower": last_bb_lower,
+            "donch_upper": last_donch_upper, "donch_mid": last_donch_mid, "donch_lower": last_donch_lower,
+            "fib_382": last_fib_382, "fib_500": last_fib_500, "fib_618": last_fib_618,
+            "volume_balance_ratio": last_vol_balance,
         })
 
         # 5. ¿Ejecutar orden?
         if signal_data["signal"] not in ("buy", "sell"):
             user_logger.info("Sin orden: señal es %s (solo comprar/vender ejecutan).", SIGNAL_LABEL_ES.get(signal_data["signal"], signal_data["signal"]))
+            _emit_analysis("PAIR_EXECUTION", f"pair={pair} executed=False reason=no_action signal={signal_data['signal']}")
             continue
         if signal_data["confidence"] < 0.7:
             # Para la estrategia técnica, la confianza es 1.0 si hay señal, o 0.0 si es hold.
             # Por lo tanto, si es menor a 0.7 (es 0.0), no hacemos nada
+            _emit_analysis("PAIR_EXECUTION", f"pair={pair} executed=False reason=low_confidence confidence={signal_data['confidence']:.2f}")
             continue
 
         # Verificar límite de trades diarios por par (solo bloquea COMPRAS, ventas siempre permitidas)
@@ -1095,6 +1235,13 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 SIGNAL_LABEL_ES.get(signal_data["signal"], signal_data["signal"]).upper(),
                 pair, filled, price_exec, order_id, simulated
             )
+            _emit_analysis(
+                "PAIR_EXECUTION",
+                (
+                    f"pair={pair} executed=True side={signal_data['signal']} amount={filled} price={price_exec} "
+                    f"order_id={order_id} simulated={simulated} amount_usdt={signal_data.get('amount_usdt', 0.0):.4f}"
+                ),
+            )
             orders_this_cycle.append({
                 "pair": pair, "side": signal_data["signal"], "amount": filled,
                 "price": price_exec, "order_id": order_id, "simulated": simulated,
@@ -1169,6 +1316,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             )
         else:
             errors_this_cycle.append(f"{pair}: fallo al crear orden")
+            _emit_analysis("PAIR_EXECUTION", f"pair={pair} executed=False reason=order_creation_failed signal={signal_data['signal']}")
 
     # Balance al final
     balance_end = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
@@ -1185,6 +1333,14 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     if errors_this_cycle:
         for err in errors_this_cycle:
             user_logger.warning("  Error en ciclo: %s", err)
+
+    _emit_analysis(
+        "CYCLE_END",
+        (
+            f"cycle={cycle_count} orders={len(orders_this_cycle)} signals={len(signals_for_telegram)} "
+            f"errors={len(errors_this_cycle)} balance_end={balance_summary_end}"
+        ),
+    )
 
     # Telegram: Resumen del ciclo y señales integradas en un único panel
     _profile_label = f"🌙 {risk_profile} (nocturno)" if _schedule_active else f"☀️ {risk_profile}"
