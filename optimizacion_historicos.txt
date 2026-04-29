@@ -1,0 +1,64 @@
+OPTIMIZACION ROBUSTA SOBRE HISTORICOS
+================================================================================
+Archivos: 3
+Configuraciones evaluadas: 22
+
+TOP 1: score=2.035 | avg_ret=-0.36% | avg_wr=55.8% | avg_dd=0.71% | trades=17
+params={'ema_fast': 7, 'ema_slow': 30, 'adx_th': 28, 'sl': 3.0, 'tp': 1.8, 'prev_take': 0.8, 'trail_act': 2.5, 'trail_dist': 0.55, 'inv_t': 10, 'inv_r': 10, 'use_vwap': True, 'use_daily': False, 'vol_bal_min': 1.08, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 58, 'rsi_rango_max': 28, 'rsi_bear_max': 20, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 6, 'enable_bear_reversal': True, 'be_trigger': 1.4, 'time_stop_candles': 24}
+  BTCUSDT: ret=-0.45% wr=37.5% dd=0.70% trades=8 final=$995.50
+  ETHUSDT: ret=-0.81% wr=50.0% dd=1.04% trades=4 final=$991.91
+  SOLUSDT: ret=+0.19% wr=80.0% dd=0.38% trades=5 final=$1001.89
+
+TOP 2: score=1.542 | avg_ret=-0.39% | avg_wr=47.3% | avg_dd=0.81% | trades=22
+params={'ema_fast': 5, 'ema_slow': 30, 'adx_th': 25, 'sl': 2.5, 'tp': 2.2, 'prev_take': 0.8, 'trail_act': 1.2, 'trail_dist': 0.55, 'inv_t': 10, 'inv_r': 5, 'use_vwap': True, 'use_daily': False, 'vol_bal_min': 1.08, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 58, 'rsi_rango_max': 28, 'rsi_bear_max': 16, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 6, 'enable_bear_reversal': True, 'be_trigger': 1.0, 'time_stop_candles': 24}
+  BTCUSDT: ret=-0.43% wr=45.5% dd=0.72% trades=11 final=$995.69
+  ETHUSDT: ret=-0.77% wr=25.0% dd=1.00% trades=4 final=$992.27
+  SOLUSDT: ret=+0.03% wr=71.4% dd=0.71% trades=7 final=$1000.27
+
+TOP 3: score=1.514 | avg_ret=-0.36% | avg_wr=46.2% | avg_dd=0.85% | trades=27
+params={'ema_fast': 5, 'ema_slow': 30, 'adx_th': 23, 'sl': 2.0, 'tp': 2.8, 'prev_take': 1.0, 'trail_act': 1.2, 'trail_dist': 0.8, 'inv_t': 10, 'inv_r': 5, 'use_vwap': True, 'use_daily': False, 'vol_bal_min': 1.08, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 58, 'rsi_rango_max': 28, 'rsi_bear_max': 20, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 6, 'enable_bear_reversal': False, 'be_trigger': 1.0, 'time_stop_candles': 24}
+  BTCUSDT: ret=-0.49% wr=33.3% dd=0.82% trades=12 final=$995.10
+  ETHUSDT: ret=-0.64% wr=42.9% dd=1.09% trades=7 final=$993.63
+  SOLUSDT: ret=+0.05% wr=62.5% dd=0.62% trades=8 final=$1000.51
+
+TOP 4: score=1.402 | avg_ret=-0.68% | avg_wr=59.2% | avg_dd=1.44% | trades=23
+params={'ema_fast': 5, 'ema_slow': 20, 'adx_th': 28, 'sl': 2.5, 'tp': 1.8, 'prev_take': 0.8, 'trail_act': 1.2, 'trail_dist': 0.35, 'inv_t': 20, 'inv_r': 5, 'use_vwap': True, 'use_daily': False, 'vol_bal_min': 1.08, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 62, 'rsi_rango_max': 24, 'rsi_bear_max': 16, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 5, 'enable_bear_reversal': True, 'be_trigger': 1.4, 'time_stop_candles': 24}
+  BTCUSDT: ret=-0.62% wr=50.0% dd=1.22% trades=10 final=$993.76
+  ETHUSDT: ret=-2.12% wr=40.0% dd=2.53% trades=5 final=$978.77
+  SOLUSDT: ret=+0.71% wr=87.5% dd=0.56% trades=8 final=$1007.12
+
+TOP 5: score=1.339 | avg_ret=-0.41% | avg_wr=46.0% | avg_dd=1.07% | trades=17
+params={'ema_fast': 7, 'ema_slow': 26, 'adx_th': 25, 'sl': 3.0, 'tp': 2.8, 'prev_take': 1.3, 'trail_act': 2.5, 'trail_dist': 0.8, 'inv_t': 15, 'inv_r': 5, 'use_vwap': True, 'use_daily': True, 'vol_bal_min': 1.03, 'pullback_mult': 1.002, 'rsi_bull_min': 35, 'rsi_bull_max': 62, 'rsi_rango_max': 24, 'rsi_bear_max': 16, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 5, 'enable_bear_reversal': False, 'be_trigger': 1.0, 'time_stop_candles': 24}
+  BTCUSDT: ret=-0.75% wr=16.7% dd=0.89% trades=6 final=$992.48
+  ETHUSDT: ret=-0.55% wr=50.0% dd=1.21% trades=4 final=$994.49
+  SOLUSDT: ret=+0.07% wr=71.4% dd=1.10% trades=7 final=$1000.67
+
+TOP 6: score=1.315 | avg_ret=-0.44% | avg_wr=50.9% | avg_dd=1.35% | trades=21
+params={'ema_fast': 9, 'ema_slow': 20, 'adx_th': 28, 'sl': 2.0, 'tp': 2.2, 'prev_take': 0.8, 'trail_act': 2.5, 'trail_dist': 0.35, 'inv_t': 20, 'inv_r': 15, 'use_vwap': True, 'use_daily': False, 'vol_bal_min': 1.08, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 58, 'rsi_rango_max': 28, 'rsi_bear_max': 16, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 5, 'enable_bear_reversal': True, 'be_trigger': 1.4, 'time_stop_candles': 32}
+  BTCUSDT: ret=-1.10% wr=25.0% dd=1.54% trades=8 final=$989.01
+  ETHUSDT: ret=-1.07% wr=50.0% dd=1.84% trades=4 final=$989.33
+  SOLUSDT: ret=+0.84% wr=77.8% dd=0.67% trades=9 final=$1008.40
+
+TOP 7: score=1.159 | avg_ret=-0.33% | avg_wr=40.7% | avg_dd=0.92% | trades=31
+params={'ema_fast': 5, 'ema_slow': 26, 'adx_th': 23, 'sl': 2.0, 'tp': 2.2, 'prev_take': 1.0, 'trail_act': 1.8, 'trail_dist': 0.35, 'inv_t': 10, 'inv_r': 5, 'use_vwap': True, 'use_daily': True, 'vol_bal_min': 1.08, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 62, 'rsi_rango_max': 28, 'rsi_bear_max': 20, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 5, 'enable_bear_reversal': True, 'be_trigger': 1.0, 'time_stop_candles': 32}
+  BTCUSDT: ret=-0.60% wr=33.3% dd=0.92% trades=12 final=$994.02
+  ETHUSDT: ret=-0.98% wr=25.0% dd=1.30% trades=8 final=$990.20
+  SOLUSDT: ret=+0.59% wr=63.6% dd=0.52% trades=11 final=$1005.92
+
+TOP 8: score=0.705 | avg_ret=-0.88% | avg_wr=54.4% | avg_dd=1.88% | trades=33
+params={'ema_fast': 7, 'ema_slow': 20, 'adx_th': 23, 'sl': 3.0, 'tp': 2.8, 'prev_take': 0.8, 'trail_act': 1.8, 'trail_dist': 0.55, 'inv_t': 20, 'inv_r': 5, 'use_vwap': True, 'use_daily': False, 'vol_bal_min': 1.15, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 62, 'rsi_rango_max': 24, 'rsi_bear_max': 16, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 5, 'enable_bear_reversal': False, 'be_trigger': 1.4, 'time_stop_candles': 24}
+  BTCUSDT: ret=-0.88% wr=50.0% dd=1.91% trades=14 final=$991.18
+  ETHUSDT: ret=-2.67% wr=33.3% dd=3.05% trades=9 final=$973.29
+  SOLUSDT: ret=+0.92% wr=80.0% dd=0.69% trades=10 final=$1009.21
+
+TOP 9: score=0.594 | avg_ret=-0.87% | avg_wr=47.5% | avg_dd=1.62% | trades=45
+params={'ema_fast': 5, 'ema_slow': 30, 'adx_th': 23, 'sl': 2.5, 'tp': 1.8, 'prev_take': 0.8, 'trail_act': 1.2, 'trail_dist': 0.55, 'inv_t': 15, 'inv_r': 10, 'use_vwap': True, 'use_daily': False, 'vol_bal_min': 1.08, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 62, 'rsi_rango_max': 24, 'rsi_bear_max': 16, 'bull_min_conf': 3, 'range_min_conf': 4, 'bear_min_conf': 6, 'enable_bear_reversal': True, 'be_trigger': 1.4, 'time_stop_candles': 24}
+  BTCUSDT: ret=-1.13% wr=40.0% dd=1.65% trades=20 final=$988.70
+  ETHUSDT: ret=-1.86% wr=33.3% dd=2.15% trades=12 final=$981.40
+  SOLUSDT: ret=+0.39% wr=69.2% dd=1.05% trades=13 final=$1003.87
+
+TOP 10: score=0.581 | avg_ret=-0.88% | avg_wr=49.7% | avg_dd=1.77% | trades=26
+params={'ema_fast': 7, 'ema_slow': 20, 'adx_th': 25, 'sl': 2.5, 'tp': 2.2, 'prev_take': 1.0, 'trail_act': 2.5, 'trail_dist': 0.8, 'inv_t': 20, 'inv_r': 15, 'use_vwap': True, 'use_daily': True, 'vol_bal_min': 1.03, 'pullback_mult': 1.004, 'rsi_bull_min': 35, 'rsi_bull_max': 62, 'rsi_rango_max': 24, 'rsi_bear_max': 20, 'bull_min_conf': 4, 'range_min_conf': 4, 'bear_min_conf': 5, 'enable_bear_reversal': True, 'be_trigger': 1.0, 'time_stop_candles': 24}
+  BTCUSDT: ret=-0.75% wr=54.5% dd=1.32% trades=11 final=$992.50
+  ETHUSDT: ret=-2.31% wr=16.7% dd=2.77% trades=6 final=$976.87
+  SOLUSDT: ret=+0.41% wr=77.8% dd=1.21% trades=9 final=$1004.12

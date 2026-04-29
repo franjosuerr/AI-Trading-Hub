@@ -14,28 +14,28 @@ class UserBase(BaseModel):
     timeframe: str = "15m"
     interval: int = 300
     test_mode: bool = False
-    pairs: str = "SOL/USDT,ETH/USDT,BTC/USDT,XRP/USDT"
+    pairs: str = "BTC/USDT,ETH/USDT,SOL/USDT"
     candle_count: int = 350
     stop_loss_percent: float = 3.0
-    max_trades_per_day: int = 5
+    max_trades_per_day: int = 4
     pair_delay: int = 2
-    max_exposure_percent: float = 80.0
-    cooldown_minutes: int = 120
+    max_exposure_percent: float = 40.0
+    cooldown_minutes: int = 180
     log_level: str = "INFO"
     
     ema_fast: int = 7
     ema_slow: int = 30
     adx_period: int = 14
-    adx_threshold: int = 25
-    invest_percentage: float = 25.0
-    invest_percentage_ranging: float = 15.0
+    adx_threshold: int = 28
+    invest_percentage: float = 10.0
+    invest_percentage_ranging: float = 10.0
     
-    trailing_stop_activation: float = 1.5
-    trailing_stop_distance: float = 0.5
+    trailing_stop_activation: float = 2.5
+    trailing_stop_distance: float = 0.55
     macro_timeframe: str = "1h"
-    risk_profile: str = "agresivo"
+    risk_profile: str = "conservador"
     
-    use_vwap_filter: bool = False
+    use_vwap_filter: bool = True
     use_daily_open_filter: bool = False
 
     # Horario Nocturno
@@ -45,6 +45,18 @@ class UserBase(BaseModel):
 
     # Fee del exchange
     fee_rate: float = 0.1
+
+    # Gate de producción por performance
+    prod_gate_enabled: bool = True
+    prod_gate_lookback_days: int = 7
+    prod_gate_min_trades: int = 8
+    prod_gate_min_win_rate: float = 48.0
+    prod_gate_min_net_profit_pct: float = 0.0
+    prod_gate_max_drawdown_pct: float = 3.0
+
+    # Límites de pérdida (kill switch)
+    daily_loss_limit_pct: float = 1.5
+    weekly_loss_limit_pct: float = 4.0
     schedule_risk_profile: str = "suave"
 
 class UserCreate(UserBase):
@@ -95,6 +107,18 @@ class UserUpdate(BaseModel):
 
     # Fee del exchange
     fee_rate: Optional[float] = None
+
+    # Gate de producción por performance
+    prod_gate_enabled: Optional[bool] = None
+    prod_gate_lookback_days: Optional[int] = None
+    prod_gate_min_trades: Optional[int] = None
+    prod_gate_min_win_rate: Optional[float] = None
+    prod_gate_min_net_profit_pct: Optional[float] = None
+    prod_gate_max_drawdown_pct: Optional[float] = None
+
+    # Límites de pérdida (kill switch)
+    daily_loss_limit_pct: Optional[float] = None
+    weekly_loss_limit_pct: Optional[float] = None
 
 class UserResponse(UserBase):
     id: int

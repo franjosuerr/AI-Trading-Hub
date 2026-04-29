@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ..logger_config import setup_frontend_logger, BOT_LOG_DIR
+from ..logger_config import setup_frontend_logger, BOT_LOG_DIR, get_user_analysis_log_path
 from .auth import get_current_user_from_token
 
 # Logger dedicado → logs/frontend.log
@@ -67,4 +67,22 @@ async def download_bot_log(
         path=filepath,
         media_type="text/plain",
         filename=download_name,
+    )
+
+
+@router.get("/bot/{user_id}/analysis/download")
+async def download_bot_analysis_log(user_id: int, request: Request):
+    """Descarga el log analítico (único fichero) de un usuario."""
+    current = get_current_user_from_token(request)
+    if current["role"] != "admin" and current["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Sin permisos para descargar estos logs")
+
+    filepath = get_user_analysis_log_path(user_id)
+    if not os.path.isfile(filepath):
+        raise HTTPException(status_code=404, detail="No se encontró log analítico para este usuario")
+
+    return FileResponse(
+        path=filepath,
+        media_type="text/plain",
+        filename=f"bot_user_{user_id}_analysis.log",
     )
