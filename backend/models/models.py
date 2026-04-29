@@ -66,6 +66,18 @@ class User(Base):
     # Fee del exchange (porcentaje, 0.1 = 0.1% para CoinEx limit/maker)
     fee_rate = Column(Float, default=0.1)
 
+    # Producción: gate de compra por performance reciente
+    prod_gate_enabled = Column(Boolean, default=True)
+    prod_gate_lookback_days = Column(Integer, default=7)
+    prod_gate_min_trades = Column(Integer, default=8)
+    prod_gate_min_win_rate = Column(Float, default=48.0)
+    prod_gate_min_net_profit_pct = Column(Float, default=0.0)
+    prod_gate_max_drawdown_pct = Column(Float, default=3.0)
+
+    # Kill switches de riesgo por ventana temporal
+    daily_loss_limit_pct = Column(Float, default=1.5)
+    weekly_loss_limit_pct = Column(Float, default=4.0)
+
     # Horario Nocturno / Schedule
     schedule_enabled = Column(Boolean, default=False)
     schedule_start_hour = Column(Integer, default=22)  # 10 PM

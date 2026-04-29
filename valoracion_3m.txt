@@ -1,0 +1,58 @@
+VALORACION 3 MESES (2025-01 a 2025-03) - CONTINUO
+====================================================================================================
+Balance inicial simulado: $100.00 USDT
+Formato: retorno%, win rate%, trades, final$, PF, avg_win$, avg_loss$
+
+BTCUSDT:
+  [ANTES]
+  - suave        ret=  -3.42% | wr= 44.0% | n= 25 | final=$96.58 | pf=0.43 | aw=+0.1925 | al=-0.3512
+  - conservador  ret=  -4.02% | wr= 50.0% | n= 54 | final=$95.98 | pf=0.67 | aw=+0.2069 | al=-0.3103
+  - agresivo     ret=  -6.28% | wr= 48.2% | n=112 | final=$93.72 | pf=0.76 | aw=+0.2261 | al=-0.2764
+
+ETHUSDT:
+  [ANTES]
+  - suave        ret=  -4.78% | wr= 29.6% | n= 27 | final=$95.22 | pf=0.35 | aw=+0.2765 | al=-0.3335
+  - conservador  ret=  -8.59% | wr= 48.3% | n= 58 | final=$91.41 | pf=0.42 | aw=+0.1913 | al=-0.4232
+  - agresivo     ret= -10.74% | wr= 48.6% | n=105 | final=$89.26 | pf=0.59 | aw=+0.2396 | al=-0.3831
+
+SOLUSDT:
+  [ANTES]
+  - suave        ret=  -1.10% | wr= 56.7% | n= 30 | final=$98.90 | pf=0.94 | aw=+0.2993 | al=-0.4185
+  - conservador  ret=  -3.28% | wr= 52.0% | n= 50 | final=$96.72 | pf=0.79 | aw=+0.3094 | al=-0.4230
+  - agresivo     ret=  -8.47% | wr= 51.7% | n=120 | final=$91.53 | pf=0.76 | aw=+0.3022 | al=-0.4226
+
+[BENCHMARK_ESTRATEGIAS_PUBLICAS_INSPIRADAS]
+----------------------------------------------------------------------------------------------------
+  - balanced       ret=  -0.39% | wr= 45.9% | n= 37 | final=$99.61 | pf=1.07
+  - trend_guard    ret=  -0.23% | wr= 50.0% | n= 16 | final=$99.77 | pf=0.98
+  - momentum_plus  ret=  -1.93% | wr= 35.1% | n= 37 | final=$98.07 | pf=0.59
+  - perfil_ganador=trend_guard
+
+[HYPEROPT_RESULTADO]
+----------------------------------------------------------------------------------------------------
+  - score=4.2615 | ret=0.77% | wr=50.0% | n=18 | pf=2.32 | fv=$100.77
+  - stop=3.5% | trail_act=1.5% | trail_dist=0.4% | cooldown=4 barras
+  - bull_rsi=[40,66] | range_rsi<27 | bull_confs>=5
+  - roi_table={2: 5.0, 8: 2.5, 20: 1.0, 40: 0.0}
+
+[DESPUES_FIEL_PORTAFOLIO]
+  - mejorado_auto_fiel profile=trend_guard ret=   0.71% | wr= 50.0% | n= 18 | final=$100.71 | pf=2.36 | aw=+0.1852 | al=-0.0783
+  - detalle por activo (en simulacion de portafolio unico):
+    * BTCUSDT: net=+0.9618 | wr=50.0% | n=18 | pf=2.36
+    * ETHUSDT: net=+0.0000 | wr=0.0% | n=0 | pf=0.00
+    * SOLUSDT: net=+0.0000 | wr=0.0% | n=0 | pf=0.00
+
+[ANALISIS_WALK_FORWARD_POR_MES]
+----------------------------------------------------------------------------------------------------
+  - 2025-01: ret=   0.31% | wr= 62.5% | n=  8 | final=$100.31 | pf=3.18 | fees=$0.1742
+      BTCUSDT: n=8 | wr=62.5% | pf=3.18 | net=+0.4008
+  - 2025-02: ret=  -0.31% | wr=  0.0% | n=  4 | final=$99.69 | pf=0.00 | fees=$0.0757
+      BTCUSDT: n=4 | wr=0.0% | pf=0.00 | net=-0.2750
+  - 2025-03: ret=   0.39% | wr= 66.7% | n=  6 | final=$100.39 | pf=4.71 | fees=$0.1277
+      BTCUSDT: n=6 | wr=66.7% | pf=4.71 | net=+0.4529
+
+RESUMEN GLOBAL (promedio por par) - ANTES
+----------------------------------------------------------------------------------------------------
+  - suave        ret_prom=  -3.10% | wr_prom= 43.4% | trades= 82 | pf_prom=0.57
+  - conservador  ret_prom=  -5.29% | wr_prom= 50.1% | trades=162 | pf_prom=0.63
+  - agresivo     ret_prom=  -8.49% | wr_prom= 49.5% | trades=337 | pf_prom=0.71

@@ -1,0 +1,47 @@
+{
+  "best_profile": "trend_guard",
+  "hyperopt_params": {
+    "bull_rsi_low": 40,
+    "bull_rsi_high": 66,
+    "range_rsi_thresh": 27,
+    "bear_rsi_thresh_suave": 26,
+    "bear_rsi_thresh_agresivo": 29,
+    "bull_min_confirmations": 5,
+    "range_min_confirmations": 6,
+    "stop_loss": 3.5,
+    "trailing_activation": 1.5,
+    "trailing_distance": 0.4,
+    "cooldown_bars": 4,
+    "roi_table": {
+      "2": 5.0,
+      "8": 2.5,
+      "20": 1.0,
+      "40": 0.0
+    }
+  },
+  "generated_from": [
+    "2025-01",
+    "2025-02",
+    "2025-03"
+  ],
+  "metrics": {
+    "balanced": {
+      "ret": -0.3924152385448991,
+      "pf": 1.0694929377139057,
+      "wr": 45.94594594594595,
+      "n": 37
+    },
+    "trend_guard": {
+      "ret": -0.2313648679667466,
+      "pf": 0.9841875292944026,
+      "wr": 50.0,
+      "n": 16
+    },
+    "momentum_plus": {
+      "ret": -1.9255215682393614,
+      "pf": 0.5934223536584897,
+      "wr": 35.13513513513514,
+      "n": 37
+    }
+  }
+}

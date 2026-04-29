@@ -19,6 +19,15 @@ def migrate():
             ("risk_profile", "VARCHAR DEFAULT 'conservador'"),
             ("use_vwap_filter", "BOOLEAN DEFAULT 1"),
             ("use_daily_open_filter", "BOOLEAN DEFAULT 0"),
+            ("fee_rate", "REAL DEFAULT 0.1"),
+            ("prod_gate_enabled", "BOOLEAN DEFAULT 1"),
+            ("prod_gate_lookback_days", "INTEGER DEFAULT 7"),
+            ("prod_gate_min_trades", "INTEGER DEFAULT 8"),
+            ("prod_gate_min_win_rate", "REAL DEFAULT 48.0"),
+            ("prod_gate_min_net_profit_pct", "REAL DEFAULT 0.0"),
+            ("prod_gate_max_drawdown_pct", "REAL DEFAULT 3.0"),
+            ("daily_loss_limit_pct", "REAL DEFAULT 1.5"),
+            ("weekly_loss_limit_pct", "REAL DEFAULT 4.0"),
         ]
         
         for col_name, col_def in columns:

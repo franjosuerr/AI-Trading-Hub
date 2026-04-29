@@ -9,6 +9,30 @@ RESUMEN DE ESTRATEGIA: Evaluación de Enero 2025 (Tendencia y Rango)
   > Perfil AGRESIVO (Actividad Elevada):
     Retorno:     -0.63% | Win Rate:  48.7% | Trades:  39 | Final: $65.58
 
+🪙 BTCUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:     -0.98% | Win Rate:   0.0% | Trades:   2 | Final: $65.36
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -1.60% | Win Rate:  25.0% | Trades:   8 | Final: $64.94
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -3.85% | Win Rate:  41.4% | Trades:  29 | Final: $63.46
+
+🪙 BTCUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:      0.77% | Win Rate:  66.7% | Trades:   9 | Final: $66.51
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -0.21% | Win Rate:  66.7% | Trades:  21 | Final: $65.86
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -2.52% | Win Rate:  51.4% | Trades:  37 | Final: $64.34
+
+🪙 BTCUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+
 🪙 ETHUSDT - Evaluación de Perfiles de Riesgo
   > Perfil SUAVE (Bloqueo Extremo):
     Retorno:     -2.99% | Win Rate:  30.8% | Trades:  13 | Final: $64.03
@@ -17,6 +41,30 @@ RESUMEN DE ESTRATEGIA: Evaluación de Enero 2025 (Tendencia y Rango)
   > Perfil AGRESIVO (Actividad Elevada):
     Retorno:     -7.50% | Win Rate:  42.5% | Trades:  40 | Final: $61.05
 
+🪙 ETHUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:     -1.26% | Win Rate:  33.3% | Trades:   6 | Final: $65.17
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -1.90% | Win Rate:  53.3% | Trades:  15 | Final: $64.75
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -1.87% | Win Rate:  55.6% | Trades:  27 | Final: $64.76
+
+🪙 ETHUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:     -1.40% | Win Rate:  33.3% | Trades:   9 | Final: $65.08
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -2.07% | Win Rate:  50.0% | Trades:  20 | Final: $64.63
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -1.95% | Win Rate:  45.5% | Trades:  33 | Final: $64.71
+
+🪙 ETHUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+
 🪙 SOLUSDT - Evaluación de Perfiles de Riesgo
   > Perfil SUAVE (Bloqueo Extremo):
     Retorno:     -0.70% | Win Rate:  59.1% | Trades:  22 | Final: $65.54
@@ -24,3 +72,27 @@ RESUMEN DE ESTRATEGIA: Evaluación de Enero 2025 (Tendencia y Rango)
     Retorno:     -2.80% | Win Rate:  50.0% | Trades:  30 | Final: $64.15
   > Perfil AGRESIVO (Actividad Elevada):
     Retorno:     -2.35% | Win Rate:  56.5% | Trades:  46 | Final: $64.45
+
+🪙 SOLUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:     -0.56% | Win Rate:  60.0% | Trades:   5 | Final: $65.63
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -3.13% | Win Rate:  48.4% | Trades:  31 | Final: $63.93
+
+🪙 SOLUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:      0.56% | Win Rate:  57.1% | Trades:   7 | Final: $66.37
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:      1.04% | Win Rate:  53.8% | Trades:  13 | Final: $66.69
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:     -2.95% | Win Rate:  44.4% | Trades:  36 | Final: $64.05
+
+🪙 SOLUSDT - Evaluación de Perfiles de Riesgo
+  > Perfil SUAVE (Bloqueo Extremo):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+  > Perfil CONSERVADOR (Default Recomendado):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00
+  > Perfil AGRESIVO (Actividad Elevada):
+    Retorno:      0.00% | Win Rate:   0.0% | Trades:   0 | Final: $66.00

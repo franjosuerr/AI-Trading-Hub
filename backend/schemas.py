@@ -45,6 +45,18 @@ class UserBase(BaseModel):
 
     # Fee del exchange
     fee_rate: float = 0.1
+
+    # Gate de producción por performance
+    prod_gate_enabled: bool = True
+    prod_gate_lookback_days: int = 7
+    prod_gate_min_trades: int = 8
+    prod_gate_min_win_rate: float = 48.0
+    prod_gate_min_net_profit_pct: float = 0.0
+    prod_gate_max_drawdown_pct: float = 3.0
+
+    # Límites de pérdida (kill switch)
+    daily_loss_limit_pct: float = 1.5
+    weekly_loss_limit_pct: float = 4.0
     schedule_risk_profile: str = "suave"
 
 class UserCreate(UserBase):
@@ -95,6 +107,18 @@ class UserUpdate(BaseModel):
 
     # Fee del exchange
     fee_rate: Optional[float] = None
+
+    # Gate de producción por performance
+    prod_gate_enabled: Optional[bool] = None
+    prod_gate_lookback_days: Optional[int] = None
+    prod_gate_min_trades: Optional[int] = None
+    prod_gate_min_win_rate: Optional[float] = None
+    prod_gate_min_net_profit_pct: Optional[float] = None
+    prod_gate_max_drawdown_pct: Optional[float] = None
+
+    # Límites de pérdida (kill switch)
+    daily_loss_limit_pct: Optional[float] = None
+    weekly_loss_limit_pct: Optional[float] = None
 
 class UserResponse(UserBase):
     id: int

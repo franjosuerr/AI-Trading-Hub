@@ -9,12 +9,13 @@ que escribe a  logs/bots/user_{id}.log
 """
 
 import asyncio
+import json
 import time
 import os
 import requests
 from typing import Dict, Optional
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import ccxt
 import pandas as pd
@@ -41,6 +42,10 @@ MAX_SIGNAL_HISTORY = 10
 
 # --- Balance virtual para modo test (persiste durante la sesión del bot) ---
 _virtual_balances: Dict[int, Dict[str, float]] = {}
+
+# --- Auto-disable temporal de pares débiles por usuario ---
+_pair_disabled_until_cycle: Dict[tuple, int] = {}
+_pair_trade_cooldown_until: Dict[tuple, datetime] = {}
 
 
 def _init_virtual_balance(user_id: int, exchange_balance: dict):
@@ -453,6 +458,207 @@ def _get_total_invested_percentage(user_id: int, pairs: list, exchange_balance: 
         return 0.0
 
 
+def _estimate_portfolio_total_usdt(pairs: list, exchange_balance: dict, exchange, log) -> float:
+    """Estima valor total del portafolio en USDT usando balances actuales y último ticker por par."""
+    try:
+        if not exchange_balance:
+            return 0.0
+
+        total = 0.0
+        if "USDT" in exchange_balance and isinstance(exchange_balance["USDT"], dict):
+            total += float(exchange_balance["USDT"].get("total", 0) or 0)
+
+        for pair in pairs:
+            base = pair.split("/")[0] if "/" in pair else pair
+            if base in exchange_balance and isinstance(exchange_balance[base], dict):
+                base_amount = float(exchange_balance[base].get("total", 0) or 0)
+                if base_amount > 0:
+                    try:
+                        ticker = exchange.fetch_ticker(pair)
+                        price = float(ticker.get("last", 0) or 0)
+                        total += base_amount * price
+                    except Exception:
+                        pass
+
+        return total
+    except Exception as e:
+        log.warning("Error estimando valor total de portafolio: %s", str(e)[:100])
+        return 0.0
+
+
+def _get_recent_trade_performance(user_id: int, days: int, simulated: Optional[bool] = None) -> dict:
+    """Calcula performance reciente sobre ventas cerradas en ventana de días."""
+    cutoff = get_colombia_time() - timedelta(days=days)
+    trades = []
+    db = SessionLocal()
+    try:
+        q = db.query(Trade).filter(
+            Trade.user_id == user_id,
+            Trade.side == "sell",
+            Trade.timestamp >= cutoff,
+        ).order_by(Trade.timestamp.asc())
+        if simulated is not None:
+            q = q.filter(Trade.simulated == simulated)
+        trades = q.all()
+    finally:
+        db.close()
+
+    profits = [float(t.profit or 0.0) for t in trades]
+    n = len(profits)
+    wins = sum(1 for p in profits if p > 0)
+    win_rate = (wins / n * 100.0) if n else 0.0
+    net_pnl = sum(profits)
+
+    eq = 0.0
+    peak = 0.0
+    max_dd_abs = 0.0
+    for p in profits:
+        eq += p
+        if eq > peak:
+            peak = eq
+        dd = peak - eq
+        if dd > max_dd_abs:
+            max_dd_abs = dd
+
+    return {
+        "trades": n,
+        "wins": wins,
+        "win_rate": win_rate,
+        "net_pnl": net_pnl,
+        "max_dd_abs": max_dd_abs,
+    }
+
+
+def _get_pair_recent_performance(
+    user_id: int,
+    pair: str,
+    lookback_trades: int = 30,
+    simulated: Optional[bool] = None,
+) -> dict:
+    """Métricas rolling por par sobre últimas ventas cerradas."""
+    db = SessionLocal()
+    trades = []
+    try:
+        q = db.query(Trade).filter(
+            Trade.user_id == user_id,
+            Trade.pair == pair,
+            Trade.side == "sell",
+        ).order_by(Trade.timestamp.desc())
+        if simulated is not None:
+            q = q.filter(Trade.simulated == simulated)
+        trades = q.limit(max(1, int(lookback_trades))).all()
+    finally:
+        db.close()
+
+    profits = [float(t.profit or 0.0) for t in reversed(trades)]
+    n = len(profits)
+    wins = [p for p in profits if p > 0]
+    losses = [p for p in profits if p <= 0]
+    win_rate = (len(wins) / n * 100.0) if n else 0.0
+    net_pnl = sum(profits)
+    gross_profit = sum(wins)
+    gross_loss_abs = abs(sum(losses))
+    profit_factor = (gross_profit / gross_loss_abs) if gross_loss_abs > 0 else (999.0 if gross_profit > 0 else 0.0)
+
+    return {
+        "trades": n,
+        "win_rate": win_rate,
+        "net_pnl": net_pnl,
+        "profit_factor": profit_factor,
+    }
+
+
+def _derive_adaptive_controls(regime: str, last_adx: float, volatility_pct: float, risk_pressure: float) -> dict:
+    """Ajusta parámetros de riesgo de forma autónoma según régimen, volatilidad y presión de riesgo."""
+    rp = max(0.0, min(1.0, float(risk_pressure or 0.0)))
+    vol = max(0.0, float(volatility_pct or 0.0))
+
+    if rp >= 0.80:
+        profile = "suave"
+    elif regime == "BULL" and last_adx >= 30 and vol <= 2.2 and rp <= 0.35:
+        profile = "agresivo"
+    elif regime == "RANGO" and vol <= 1.8 and rp <= 0.55:
+        profile = "conservador"
+    else:
+        profile = "conservador"
+
+    # Multiplicadores de tamaño y riesgo (más presión -> más defensivo)
+    invest_mult = max(0.35, 1.0 - (rp * 0.60))
+    stop_mult = max(0.55, 1.0 - (rp * 0.35))
+    trail_activation_mult = max(0.70, 1.0 - (rp * 0.25))
+    trail_distance_mult = max(0.60, 1.0 - (rp * 0.30))
+
+    # Con volatilidad alta endurecemos aún más el tamaño
+    if vol >= 3.0:
+        invest_mult *= 0.85
+    if vol >= 4.0:
+        profile = "suave"
+
+    return {
+        "profile": profile,
+        "invest_mult": max(0.25, min(1.2, invest_mult)),
+        "stop_mult": max(0.50, min(1.1, stop_mult)),
+        "trail_activation_mult": max(0.65, min(1.1, trail_activation_mult)),
+        "trail_distance_mult": max(0.55, min(1.1, trail_distance_mult)),
+    }
+
+
+def _compute_pair_edge_score(pair_perf: dict, min_trades: int) -> float:
+    """Calcula score [0..1] de edge por par usando PF, WR y PnL rolling."""
+    trades = int(pair_perf.get("trades", 0) or 0)
+    pf = float(pair_perf.get("profit_factor", 0.0) or 0.0)
+    wr = float(pair_perf.get("win_rate", 0.0) or 0.0)
+    net = float(pair_perf.get("net_pnl", 0.0) or 0.0)
+
+    if trades < min_trades:
+        return 0.35
+
+    pf_norm = max(0.0, min(1.0, (pf - 0.80) / 0.50))
+    wr_norm = max(0.0, min(1.0, (wr - 40.0) / 20.0))
+    net_norm = 1.0 if net > 0 else 0.0
+
+    score = (0.55 * pf_norm) + (0.35 * wr_norm) + (0.10 * net_norm)
+    return max(0.0, min(1.0, score))
+
+
+def _timeframe_to_minutes(timeframe: str) -> int:
+    """Convierte timeframes simples tipo 15m/1h/1d a minutos."""
+    try:
+        tf = str(timeframe or "15m").strip().lower()
+        if tf.endswith("m"):
+            return max(1, int(tf[:-1]))
+        if tf.endswith("h"):
+            return max(1, int(tf[:-1])) * 60
+        if tf.endswith("d"):
+            return max(1, int(tf[:-1])) * 1440
+    except Exception:
+        pass
+    return 15
+
+
+def _load_autotuned_profile() -> dict:
+    """Loads the latest best strategy profile and hyperopt params generated by the offline evaluator."""
+    try:
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        profile_path = os.path.join(root_dir, "autotuned_strategy_profile.json")
+        if not os.path.exists(profile_path):
+            return {"profile": "balanced", "hyperopt_params": {}}
+        with open(profile_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        profile = str(data.get("best_profile", "balanced") or "balanced").strip().lower()
+        if profile not in {"balanced", "trend_guard", "momentum_plus"}:
+            profile = "balanced"
+        hp = dict(data.get("hyperopt_params") or {})
+        roi_table = hp.get("roi_table") or {}
+        if isinstance(roi_table, dict):
+            hp["roi_table"] = {
+                int(k): float(v) for k, v in roi_table.items()
+            }
+        return {"profile": profile, "hyperopt_params": hp}
+    except Exception:
+        return {"profile": "balanced", "hyperopt_params": {}}
+
+
 # ─── Ciclo de trading completo (por usuario) ───
 
 async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_count):
@@ -480,6 +686,61 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     use_vwap = getattr(config, "use_vwap_filter", False)
     use_daily = getattr(config, "use_daily_open_filter", False)
     fee_rate = getattr(config, "fee_rate", 0.1) / 100  # Convertir % a decimal (0.1% → 0.001)
+    prod_gate_enabled = getattr(config, "prod_gate_enabled", True)
+    prod_gate_lookback_days = int(getattr(config, "prod_gate_lookback_days", 7) or 7)
+    prod_gate_min_trades = int(getattr(config, "prod_gate_min_trades", 8) or 8)
+    prod_gate_min_win_rate = float(getattr(config, "prod_gate_min_win_rate", 48.0) or 48.0)
+    prod_gate_min_net_profit_pct = float(getattr(config, "prod_gate_min_net_profit_pct", 0.0) or 0.0)
+    prod_gate_max_drawdown_pct = float(getattr(config, "prod_gate_max_drawdown_pct", 3.0) or 3.0)
+    daily_loss_limit_pct = float(getattr(config, "daily_loss_limit_pct", 1.5) or 1.5)
+    weekly_loss_limit_pct = float(getattr(config, "weekly_loss_limit_pct", 4.0) or 4.0)
+    adaptive_mode_enabled = bool(getattr(config, "adaptive_mode", True))
+    pair_gate_lookback_trades = int(getattr(config, "pair_gate_lookback_trades", 24) or 24)
+    pair_gate_min_trades = int(getattr(config, "pair_gate_min_trades", 12) or 12)
+    pair_gate_min_win_rate = float(getattr(config, "pair_gate_min_win_rate", 45.0) or 45.0)
+    pair_gate_min_pf = float(getattr(config, "pair_gate_min_pf", 0.95) or 0.95)
+    pair_gate_min_net_pnl = float(getattr(config, "pair_gate_min_net_pnl", 0.0) or 0.0)
+    allocator_enabled = bool(getattr(config, "allocator_enabled", True))
+    allocator_top_pairs = int(getattr(config, "allocator_top_pairs", 2) or 2)
+    pair_auto_disable_enabled = bool(getattr(config, "pair_auto_disable_enabled", True))
+    pair_auto_disable_cycles = int(getattr(config, "pair_auto_disable_cycles", 12) or 12)
+
+    # Autotuned profile selected from historical benchmark.
+    autotuned_cfg = _load_autotuned_profile()
+    auto_profile = autotuned_cfg.get("profile", "balanced")
+    hyperopt_params = autotuned_cfg.get("hyperopt_params", {})
+    bull_min_confirmations = 3
+    range_min_confirmations = 5
+    range_require_macro = False
+    min_edge_score_to_buy = 0.25
+    cold_start_quality_mult = 0.75
+    bull_rsi_low = float(hyperopt_params.get("bull_rsi_low", 36.0))
+    bull_rsi_high = float(hyperopt_params.get("bull_rsi_high", 62.0))
+    range_rsi_threshold = float(hyperopt_params.get("range_rsi_thresh", 30.0))
+    bear_rsi_thresh_suave = float(hyperopt_params.get("bear_rsi_thresh_suave", 24.0))
+    bear_rsi_thresh_agresivo = float(hyperopt_params.get("bear_rsi_thresh_agresivo", 29.0))
+    roi_table = hyperopt_params.get("roi_table", {4: 3.5, 12: 1.8, 24: 0.8, 40: 0.0})
+    if "bull_min_confirmations" in hyperopt_params:
+        bull_min_confirmations = int(hyperopt_params["bull_min_confirmations"])
+    if "range_min_confirmations" in hyperopt_params:
+        range_min_confirmations = int(hyperopt_params["range_min_confirmations"])
+
+    if auto_profile == "trend_guard":
+        bull_min_confirmations = 4
+        range_min_confirmations = 5
+        range_require_macro = True
+        min_edge_score_to_buy = 0.30
+        cold_start_quality_mult = 0.55
+        pair_gate_min_win_rate = max(pair_gate_min_win_rate, 45.0)
+        pair_gate_min_pf = max(pair_gate_min_pf, 0.95)
+    elif auto_profile == "momentum_plus":
+        bull_min_confirmations = 3
+        range_min_confirmations = 4
+        range_require_macro = False
+        min_edge_score_to_buy = 0.22
+        cold_start_quality_mult = 0.80
+        pair_gate_min_win_rate = max(38.0, pair_gate_min_win_rate - 2.0)
+        pair_gate_min_pf = max(0.90, pair_gate_min_pf - 0.02)
 
     # ─── Horario Nocturno: Override de perfil de riesgo por franja horaria ───
     schedule_enabled = getattr(config, "schedule_enabled", False)
@@ -524,6 +785,14 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 current_hour, schedule_start, schedule_end, risk_profile
             )
 
+    stop_loss = float(hyperopt_params.get("stop_loss", stop_loss))
+    trailing_activation = float(hyperopt_params.get("trailing_activation", trailing_activation))
+    trailing_distance = float(hyperopt_params.get("trailing_distance", trailing_distance))
+    pair_trade_cooldown_minutes = max(
+        15,
+        _timeframe_to_minutes(timeframe) * int(hyperopt_params.get("cooldown_bars", 3)),
+    )
+
     cycle_start = get_colombia_time().isoformat()
     user_logger.info("========== INICIO DE CICLO #%d | %s ==========", cycle_count, cycle_start)
 
@@ -543,19 +812,150 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     if test_mode:
         user_logger.info("Balance virtual: %s", _format_balance_one_line(balance_effective))
 
+    # Gate de producción y kill-switches (solo bloquean nuevas COMPRAS)
+    perf_scope_simulated = True if test_mode else False
+    portfolio_total_usdt = await asyncio.to_thread(
+        _estimate_portfolio_total_usdt, pairs, balance_effective, exchange, user_logger
+    )
+    denom_usdt = portfolio_total_usdt if portfolio_total_usdt > 0 else 1.0
+
+    perf_daily = await asyncio.to_thread(_get_recent_trade_performance, user.id, 1, perf_scope_simulated)
+    perf_weekly = await asyncio.to_thread(_get_recent_trade_performance, user.id, 7, perf_scope_simulated)
+    perf_gate = await asyncio.to_thread(
+        _get_recent_trade_performance, user.id, max(1, prod_gate_lookback_days), perf_scope_simulated
+    )
+
+    daily_pnl_pct = (perf_daily["net_pnl"] / denom_usdt) * 100.0
+    weekly_pnl_pct = (perf_weekly["net_pnl"] / denom_usdt) * 100.0
+    gate_pnl_pct = (perf_gate["net_pnl"] / denom_usdt) * 100.0
+    gate_dd_pct = (perf_gate["max_dd_abs"] / denom_usdt) * 100.0
+
+    buy_gate_reasons = []
+    if daily_pnl_pct <= -daily_loss_limit_pct:
+        buy_gate_reasons.append(
+            f"límite diario excedido ({daily_pnl_pct:.2f}% <= -{daily_loss_limit_pct:.2f}%)"
+        )
+    if weekly_pnl_pct <= -weekly_loss_limit_pct:
+        buy_gate_reasons.append(
+            f"límite semanal excedido ({weekly_pnl_pct:.2f}% <= -{weekly_loss_limit_pct:.2f}%)"
+        )
+
+    if prod_gate_enabled and perf_gate["trades"] >= prod_gate_min_trades:
+        if perf_gate["win_rate"] < prod_gate_min_win_rate:
+            buy_gate_reasons.append(
+                f"win-rate bajo ({perf_gate['win_rate']:.1f}% < {prod_gate_min_win_rate:.1f}%)"
+            )
+        if gate_pnl_pct < prod_gate_min_net_profit_pct:
+            buy_gate_reasons.append(
+                f"retorno neto insuficiente ({gate_pnl_pct:.2f}% < {prod_gate_min_net_profit_pct:.2f}%)"
+            )
+        if gate_dd_pct > prod_gate_max_drawdown_pct:
+            buy_gate_reasons.append(
+                f"drawdown elevado ({gate_dd_pct:.2f}% > {prod_gate_max_drawdown_pct:.2f}%)"
+            )
+
+    buys_blocked_by_risk_gate = len(buy_gate_reasons) > 0
+
+    # Presión de riesgo global del ciclo: 0 (relajado) a 1 (defensivo máximo)
+    risk_pressure = 0.0
+    if daily_pnl_pct < 0:
+        risk_pressure += min(abs(daily_pnl_pct) / max(0.25, daily_loss_limit_pct), 1.0) * 0.45
+    if weekly_pnl_pct < 0:
+        risk_pressure += min(abs(weekly_pnl_pct) / max(0.50, weekly_loss_limit_pct), 1.0) * 0.35
+    if prod_gate_max_drawdown_pct > 0:
+        risk_pressure += min(gate_dd_pct / prod_gate_max_drawdown_pct, 1.0) * 0.20
+    if buys_blocked_by_risk_gate:
+        risk_pressure = 1.0
+    risk_pressure = max(0.0, min(1.0, risk_pressure))
+
+    gate_pf = float(perf_gate.get("profit_factor", 0.0) or 0.0)
+    portfolio_pf_weak = perf_gate["trades"] >= prod_gate_min_trades and gate_pf < 1.0
+    market_fragile = risk_pressure >= 0.70 or (perf_gate["trades"] >= prod_gate_min_trades and gate_pf < 0.90)
+
+    if buys_blocked_by_risk_gate:
+        user_logger.warning("RISK-GATE activo (compras bloqueadas): %s", " | ".join(buy_gate_reasons))
+    elif prod_gate_enabled and perf_gate["trades"] < prod_gate_min_trades:
+        user_logger.info(
+            "RISK-GATE en warmup: %d/%d trades cerrados en %d días.",
+            perf_gate["trades"], prod_gate_min_trades, prod_gate_lookback_days
+        )
+
     _emit_analysis(
         "CYCLE_START",
         (
             f"cycle={cycle_count} test_mode={test_mode} timeframe={timeframe} pairs={','.join(pairs)} "
             f"risk_profile={risk_profile} adx_th={adx_thresh} invest_t={invest_pct_trending} invest_r={invest_pct_ranging} "
             f"trailing_act={trailing_activation} trailing_dist={trailing_distance} use_vwap={use_vwap} use_daily={use_daily} "
-            f"macro_tf={macro_tf} balance_start={balance_summary_start}"
+            f"macro_tf={macro_tf} balance_start={balance_summary_start} "
+            f"gate_enabled={prod_gate_enabled} gate_warmup={perf_gate['trades']}/{prod_gate_min_trades} "
+            f"daily_pnl_pct={daily_pnl_pct:.3f} weekly_pnl_pct={weekly_pnl_pct:.3f} gate_win={perf_gate['win_rate']:.2f} "
+            f"gate_pnl_pct={gate_pnl_pct:.3f} gate_dd_pct={gate_dd_pct:.3f} buys_blocked={buys_blocked_by_risk_gate} "
+            f"adaptive_mode={adaptive_mode_enabled} risk_pressure={risk_pressure:.3f} auto_profile={auto_profile}"
         ),
     )
 
     signals_for_telegram = []
     orders_this_cycle = []
     errors_this_cycle = []
+    adaptive_profiles_used = []
+    pair_perf_map = {}
+
+    for p in pairs:
+        pair_perf_map[p] = await asyncio.to_thread(
+            _get_pair_recent_performance,
+            user.id,
+            p,
+            pair_gate_lookback_trades,
+            perf_scope_simulated,
+        )
+
+    pair_score_map = {
+        p: _compute_pair_edge_score(pair_perf_map.get(p, {}), pair_gate_min_trades)
+        for p in pairs
+    }
+    ranked_pairs = sorted(pairs, key=lambda p: pair_score_map.get(p, 0.0), reverse=True)
+
+    if allocator_enabled:
+        target_top_pairs = allocator_top_pairs
+        if market_fragile:
+            target_top_pairs = 1
+        if len(ranked_pairs) >= 2 and float(pair_score_map.get(ranked_pairs[1], 0.0) or 0.0) < 0.55:
+            target_top_pairs = 1
+        top_n = max(1, min(len(ranked_pairs), target_top_pairs))
+        buy_enabled_pairs = set(ranked_pairs[:top_n])
+    else:
+        buy_enabled_pairs = set(pairs)
+
+    free_usdt_cycle = float(balance_effective.get("USDT", {}).get("free", 0.0) or 0.0)
+    cycle_budget_factor = max(0.20, 1.0 - (risk_pressure * 0.75))
+    if portfolio_pf_weak:
+        cycle_budget_factor *= 0.55
+        cycle_budget_factor = max(0.10, cycle_budget_factor)
+    cycle_buy_budget_usdt = free_usdt_cycle * cycle_budget_factor
+    if buys_blocked_by_risk_gate:
+        cycle_buy_budget_usdt = 0.0
+
+    if allocator_enabled and buy_enabled_pairs:
+        score_sum = sum(pair_score_map.get(p, 0.0) for p in buy_enabled_pairs)
+        if score_sum <= 0:
+            pair_budget_weights = {p: (1.0 / len(buy_enabled_pairs)) for p in buy_enabled_pairs}
+        else:
+            pair_budget_weights = {p: (pair_score_map.get(p, 0.0) / score_sum) for p in buy_enabled_pairs}
+    else:
+        pair_budget_weights = {p: (1.0 / len(pairs)) for p in pairs} if pairs else {}
+
+    cycle_budget_spent_usdt = 0.0
+    pair_budget_spent_usdt = defaultdict(float)
+
+    _emit_analysis(
+        "ALLOCATOR_STATE",
+        (
+            f"enabled={allocator_enabled} top_pairs={','.join(sorted(buy_enabled_pairs))} "
+            f"scores={{{';'.join(f'{k}:{pair_score_map.get(k,0.0):.3f}' for k in ranked_pairs)}}} "
+            f"cycle_budget_usdt={cycle_buy_budget_usdt:.4f} risk_pressure={risk_pressure:.3f} "
+            f"gate_pf={gate_pf:.3f} pf_weak={portfolio_pf_weak} fragile={market_fragile}"
+        ),
+    )
 
     for pair in pairs:
         # Delay entre pares
@@ -719,8 +1119,111 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             else:
                 # Escenario de transición, asume RANGO para ser prudente
                 regime = "RANGO"
+
+        # Volatilidad de corto plazo para autopiloto (desvío estándar de retornos)
+        volatility_pct = 0.0
+        try:
+            volatility_pct = float(df["close"].pct_change().tail(20).std() * 100.0)
+            if pd.isna(volatility_pct):
+                volatility_pct = 0.0
+        except Exception:
+            volatility_pct = 0.0
+
+        if adaptive_mode_enabled:
+            adaptive_cfg = _derive_adaptive_controls(regime, last_adx, volatility_pct, risk_pressure)
+            active_risk_profile = adaptive_cfg["profile"]
+            pair_invest_pct_trending = invest_pct_trending * adaptive_cfg["invest_mult"]
+            pair_invest_pct_ranging = invest_pct_ranging * adaptive_cfg["invest_mult"]
+            pair_stop_loss = max(1.2, stop_loss * adaptive_cfg["stop_mult"])
+            pair_trailing_activation = max(1.0, trailing_activation * adaptive_cfg["trail_activation_mult"])
+            pair_trailing_distance = max(0.25, trailing_distance * adaptive_cfg["trail_distance_mult"])
+        else:
+            active_risk_profile = risk_profile
+            pair_invest_pct_trending = invest_pct_trending
+            pair_invest_pct_ranging = invest_pct_ranging
+            pair_stop_loss = stop_loss
+            pair_trailing_activation = trailing_activation
+            pair_trailing_distance = trailing_distance
+
+        # Defensivo extra cuando la presión global ya es elevada
+        if risk_pressure >= 0.60:
+            pair_stop_loss = max(0.9, pair_stop_loss * 0.90)
+            pair_trailing_activation = max(0.8, pair_trailing_activation * 0.85)
+            pair_trailing_distance = max(0.20, pair_trailing_distance * 0.80)
+
+        # Calidad rolling por par: gate + multiplicador de tamaño
+        pair_perf = pair_perf_map.get(pair, {"trades": 0, "win_rate": 0.0, "net_pnl": 0.0, "profit_factor": 0.0})
+        pair_quality_mult = cold_start_quality_mult if pair_perf.get("trades", 0) < pair_gate_min_trades else 1.0
+        pair_buy_blocked = False
+        pair_block_reason = ""
+
+        if allocator_enabled and pair not in buy_enabled_pairs:
+            pair_buy_blocked = True
+            pair_block_reason = f"ALLOCATOR: {pair} fuera del top-{allocator_top_pairs} por edge score actual."
+
+        disabled_until = _pair_disabled_until_cycle.get((user.id, pair), 0)
+        if cycle_count < disabled_until:
+            pair_buy_blocked = True
+            pair_block_reason = f"PAIR-AUTO-DISABLE activo para {pair} hasta ciclo {disabled_until}."
+
+        cooldown_until = _pair_trade_cooldown_until.get((user.id, pair))
+        if cooldown_until and get_colombia_time() < cooldown_until:
+            pair_buy_blocked = True
+            pair_block_reason = (
+                f"COOLDOWN activo para {pair} hasta {cooldown_until.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+
+        if pair_perf.get("trades", 0) >= pair_gate_min_trades:
+            pf = float(pair_perf.get("profit_factor", 0.0) or 0.0)
+            wr = float(pair_perf.get("win_rate", 0.0) or 0.0)
+            net = float(pair_perf.get("net_pnl", 0.0) or 0.0)
+
+            if pf < pair_gate_min_pf or wr < pair_gate_min_win_rate or net < pair_gate_min_net_pnl:
+                pair_buy_blocked = True
+                pair_block_reason = (
+                    f"PAIR-GATE {pair}: pf={pf:.2f} wr={wr:.1f}% net={net:.4f} "
+                    f"(umbral pf>={pair_gate_min_pf:.2f}, wr>={pair_gate_min_win_rate:.1f}%, net>={pair_gate_min_net_pnl:.2f})"
+                )
+                if pair_auto_disable_enabled and pf < 0.70 and net < 0:
+                    _pair_disabled_until_cycle[(user.id, pair)] = cycle_count + max(1, pair_auto_disable_cycles)
+                    pair_block_reason += f" | auto-disable={pair_auto_disable_cycles} ciclos"
+
+            if pair_auto_disable_enabled and pair in {"ETH/USDT", "SOL/USDT"} and pf < 0.85:
+                aggressive_cycles = max(pair_auto_disable_cycles, 18)
+                _pair_disabled_until_cycle[(user.id, pair)] = cycle_count + aggressive_cycles
+                pair_buy_blocked = True
+                pair_block_reason = (
+                    f"PAIR-AUTO-DISABLE agresivo {pair}: pf={pf:.2f} < 0.85 | auto-disable={aggressive_cycles} ciclos"
+                )
+            elif pf < 1.00:
+                pair_quality_mult = 0.60
+            elif pf < 1.15:
+                pair_quality_mult = 0.80
+            else:
+                pair_quality_mult = 1.00
+
+        pair_invest_pct_trending *= pair_quality_mult
+        pair_invest_pct_ranging *= pair_quality_mult
+
+        adaptive_profiles_used.append(active_risk_profile)
                 
-        user_logger.info("Régimen de mercado: %s (ADX=%.1f, umbral=%d, EMA50=%.2f, EMA200=%.2f)", regime, last_adx, adx_thresh, last_ema_50, last_ema_200)
+        user_logger.info(
+            "Régimen=%s | ADX=%.1f | Volatilidad=%.2f%% | Perfil activo=%s | InvT=%.1f%% InvR=%.1f%% | SL=%.2f%% Trail(%.2f/%.2f) | PairPF=%.2f WR=%.1f%% n=%d mult=%.2f blocked=%s",
+            regime,
+            last_adx,
+            volatility_pct,
+            active_risk_profile,
+            pair_invest_pct_trending,
+            pair_invest_pct_ranging,
+            pair_stop_loss,
+            pair_trailing_activation,
+            pair_trailing_distance,
+            float(pair_perf.get("profit_factor", 0.0) or 0.0),
+            float(pair_perf.get("win_rate", 0.0) or 0.0),
+            int(pair_perf.get("trades", 0) or 0),
+            pair_quality_mult,
+            pair_buy_blocked,
+        )
         
         signal = "hold"
         reason = "Esperando señal..."
@@ -736,14 +1239,14 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             # VWAP & Daily Open filters
             filter_vwap_pass = True if not use_vwap else (current_price > last_vwap)
             filter_daily_pass = True if not use_daily else (current_price > last_daily_open)
-            filter_vol_pass = True if risk_profile in ["muy_agresivo", "agresivo"] else volume_ok
+            filter_vol_pass = True if active_risk_profile in ["muy_agresivo", "agresivo"] else volume_ok
             filter_macro_pass = macro_level in ["alcista", "neutral"]  # neutral también permite operar
             
             # Ajustar umbrales según perfil (relajados para capturar más oportunidades)
-            rsi_rango_threshold = 30  # conservador/default
-            if risk_profile == "suave": rsi_rango_threshold = 25
-            elif risk_profile == "agresivo": rsi_rango_threshold = 38
-            elif risk_profile == "muy_agresivo": rsi_rango_threshold = 42
+            rsi_rango_threshold = range_rsi_threshold
+            if active_risk_profile == "suave": rsi_rango_threshold = 25
+            elif active_risk_profile == "agresivo": rsi_rango_threshold = 34
+            elif active_risk_profile == "muy_agresivo": rsi_rango_threshold = 36
 
             if regime == "BULL":
                 # ═══ ESTRATEGIA TENDENCIAL BULL: Pullback a EMA ═══
@@ -752,18 +1255,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 is_pullback = current_price is not None and current_price <= (last_ema_slow * 1.002)
                 in_fib_buy_zone = current_price is not None and (last_fib_618 <= current_price <= last_fib_382)
                 near_donch_support = current_price is not None and current_price <= (last_donch_mid * 1.003)
-                rsi_ok_for_trend = 35 <= last_rsi <= 62
+                rsi_ok_for_trend = bull_rsi_low <= last_rsi <= bull_rsi_high
                 
                 if is_uptrend_local and is_pullback:
                     if macro_level == "bajista":
                         reason = "MERCADO ALCISTA: Compra pausada. El Filtro Macro de 1 Hora indica tendencia bajista."
                     elif macro_level == "neutral" and last_rsi >= 55:
                         reason = f"MERCADO ALCISTA (macro neutral): Esperando RSI < 55 para confirmar entrada. RSI actual: {last_rsi:.0f}."
-                    elif risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass or not filter_vol_pass):
+                    elif active_risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass or not filter_vol_pass):
                         reason = "MERCADO ALCISTA: Compra pausada por filtros intradiarios de seguridad (VWAP/Daily/Volumen)."
-                    elif risk_profile == "conservador" and not filter_vwap_pass:
+                    elif active_risk_profile == "conservador" and not filter_vwap_pass:
                         reason = "MERCADO ALCISTA: Compra pausada, el VWAP no favorece este perfil conservador."
                     else:
+                        # Anti-falling-knife: price must be recovering before we buy the pullback
+                        prev_close_3 = float(df["close"].iloc[-3]) if len(df) >= 3 else current_price
+                        rsi_prev_bull = float(rsi_series.iloc[-2]) if len(rsi_series) >= 2 and not pd.isna(rsi_series.iloc[-2]) else last_rsi
+                        is_bull_bouncing = (current_price > prev_close_3) or (last_rsi > rsi_prev_bull)
+                        all_declining_3bar = (len(df) >= 4 and
+                            float(df["close"].iloc[-1]) < float(df["close"].iloc[-2]) < float(df["close"].iloc[-3]))
                         confirmations = 0
                         if in_fib_buy_zone:
                             confirmations += 1
@@ -776,13 +1285,18 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                         if volume_ok:
                             confirmations += 1
 
-                        if confirmations >= 3:
+                        if confirmations >= bull_min_confirmations and is_bull_bouncing and not all_declining_3bar:
                             signal = "buy"
                             reason = (
                                 f"MERCADO ALCISTA: Compra por pullback confirmado ({confirmations}/5). "
                                 f"Soporte EMA/Fibo/Donchian con balance de volumen favorable ({last_vol_balance:.2f})."
                             )
-                            amount_to_invest = free_quote_now * (invest_pct_trending / 100.0)
+                            amount_to_invest = free_quote_now * (pair_invest_pct_trending / 100.0)
+                        elif not is_bull_bouncing or all_declining_3bar:
+                            reason = (
+                                f"MERCADO ALCISTA: Pullback sigue cayendo ({confirmations}/5 confs). "
+                                f"Esperando giro real del precio antes de entrar."
+                            )
                         else:
                             reason = (
                                 f"MERCADO ALCISTA: Pullback incompleto ({confirmations}/5 confirmaciones). "
@@ -795,40 +1309,45 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                         reason = f"MERCADO ALCISTA: Observando. Esperaré un retroceso profundo temporal a los ~{last_ema_slow:.0f} (EMA Lenta) para cazar un buen descuento."
 
             elif regime == "BEAR":
-                # ═══ ESTRATEGIA BEAR: Protección o Mean Reversion Extrema ═══
-                strategy_name = "Protección - Bear"
-                if risk_profile in ["suave", "conservador"]:
-                    reason = f"MERCADO BAJISTA: Bot en el sofá. Tu perfil '{risk_profile}' prohíbe cazar cuchillos al vuelo bajista."
-                else:
-                    # En Agresivo/Muy Agresivo: busca rebote extremo
-                    rsi_rebote_extremo = 30 if risk_profile == "agresivo" else 35
-                    is_oversold_brutal = last_rsi < rsi_rebote_extremo
-                    is_at_bb_lower = current_price is not None and current_price <= last_bb_lower
-                    is_at_donch_floor = current_price is not None and current_price <= (last_donch_lower * 1.002)
-                    is_deep_fib = current_price is not None and current_price <= last_fib_618
-                    momentum_recovery = indicators_dict.get("macd_line", 0) >= indicators_dict.get("macd_signal", 0)
-                    
-                    bear_confirmations = sum([
-                        1 if is_oversold_brutal else 0,
-                        1 if is_at_bb_lower else 0,
-                        1 if is_at_donch_floor else 0,
-                        1 if is_deep_fib else 0,
-                        1 if volume_balance_bullish else 0,
-                        1 if momentum_recovery else 0,
-                    ])
+                # ═══ ESTRATEGIA BEAR: Adaptación Autónoma ═══
+                # Bot ALWAYS decides in bear market - profile only controls thresholds, never blocks.
+                strategy_name = "Adaptación Bajista - Auto"
+                rsi_prev_bear = float(rsi_series.iloc[-2]) if len(rsi_series) >= 2 and not pd.isna(rsi_series.iloc[-2]) else last_rsi
+                bear_rsi_thresh = bear_rsi_thresh_suave if active_risk_profile in ["suave", "conservador"] else bear_rsi_thresh_agresivo
+                bear_confs_needed = 5 if active_risk_profile in ["suave", "conservador"] else 4
+                is_oversold_brutal = last_rsi < bear_rsi_thresh
+                is_at_bb_lower = current_price is not None and current_price <= last_bb_lower
+                is_at_donch_floor = current_price is not None and current_price <= (last_donch_lower * 1.002)
+                is_deep_fib = current_price is not None and current_price <= last_fib_618
+                momentum_recovery = indicators_dict.get("macd_line", 0) >= indicators_dict.get("macd_signal", 0)
+                rsi_turning_bear = last_rsi > rsi_prev_bear
+                vol_spike_bear = (len(df) >= 6 and
+                    float(df["volume"].iloc[-1]) > float(df["volume"].iloc[-6:-1].mean()) * 1.15)
 
-                    if bear_confirmations >= 5:
-                        signal = "buy"
-                        reason = (
-                            f"MERCADO BAJISTA: Rebote extremo validado ({bear_confirmations}/6). "
-                            f"Entrada pequeña y selectiva en sobreventa con mejora de flujo de volumen."
-                        )
-                        amount_to_invest = free_quote_now * ((invest_pct_trending * 0.5) / 100.0)
-                    else:
-                        reason = (
-                            f"MERCADO BAJISTA: Absteniéndose ({bear_confirmations}/6). "
-                            f"Exijo capitulación real + confirmación de volumen antes de intentar rebote."
-                        )
+                bear_confirmations = sum([
+                    1 if is_oversold_brutal else 0,
+                    1 if is_at_bb_lower else 0,
+                    1 if is_at_donch_floor else 0,
+                    1 if is_deep_fib else 0,
+                    1 if (volume_balance_bullish or vol_spike_bear) else 0,
+                    1 if momentum_recovery else 0,
+                    1 if rsi_turning_bear else 0,
+                ])
+
+                if bear_confirmations >= bear_confs_needed:
+                    signal = "buy"
+                    reason = (
+                        f"MERCADO BAJISTA: Capitulación detectada ({bear_confirmations}/7). "
+                        f"Perfil={active_risk_profile}: entrada táctica mínima en sobreventa extrema con giro de momentum."
+                    )
+                    # Very small position: 35% of trending size (auto-reduced for safety)
+                    amount_to_invest = free_quote_now * ((pair_invest_pct_trending * 0.35) / 100.0)
+                else:
+                    reason = (
+                        f"MERCADO BAJISTA: Monitoreando ({bear_confirmations}/{bear_confs_needed} confs). "
+                        f"RSI={last_rsi:.0f} (umbral<{bear_rsi_thresh}). "
+                        f"Esperando capitulación confirmada para entrada táctica mínima."
+                    )
 
             elif regime == "RANGO":
                 # ═══ ESTRATEGIA MEAN REVERSION: RSI + Bollinger ═══
@@ -843,33 +1362,34 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     1 if is_near_donch_floor else 0,
                     1 if is_near_fib_discount else 0,
                     1 if volume_balance_bullish else 0,
+                    1 if momentum_recovery else 0,
                 ])
                 
-                if range_confirmations >= 4:
-                    if risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass):
+                if range_confirmations >= range_min_confirmations and (not range_require_macro or macro_level != "bajista"):
+                    if active_risk_profile == "suave" and (not filter_vwap_pass or not filter_daily_pass):
                         reason = f"MERCADO LATERAL: Bloqueado por seguridad de tu perfil (VWAP Inseguro o Daily bajo)."
                     else:
                         signal = "buy"
                         reason = (
-                            f"MERCADO LATERAL: Compra de descuento ({range_confirmations}/5). "
+                            f"MERCADO LATERAL: Compra de descuento ({range_confirmations}/6). "
                             f"Confluencia BB+Donchian+Fibo con balance de volumen comprador."
                         )
-                        amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
+                        amount_to_invest = free_quote_now * (pair_invest_pct_ranging / 100.0)
                 else:
                     # Estrategia pullback: caída desde máximo reciente con RSI descendiendo
                     recent_high = float(df["high"].iloc[-12:].max())
                     pullback_pct = ((recent_high - current_price) / recent_high) * 100 if current_price and recent_high > 0 else 0.0
                     rsi_prev = float(rsi_series.iloc[-2]) if len(rsi_series) >= 2 and not pd.isna(rsi_series.iloc[-2]) else 50.0
-                    rsi_falling = last_rsi < rsi_prev
-                    if (macro_level != "bajista" and risk_profile in ["agresivo", "muy_agresivo"]
-                            and 1.5 <= pullback_pct <= 5.0 and last_rsi < 45 and rsi_falling):
+                    rsi_turning_up = last_rsi > rsi_prev
+                    if (macro_level != "bajista" and active_risk_profile in ["agresivo", "muy_agresivo"]
+                            and 1.8 <= pullback_pct <= 4.5 and last_rsi < 45 and rsi_turning_up and momentum_recovery):
                         signal = "buy"
-                        reason = f"PULLBACK LATERAL: Precio cayó {pullback_pct:.1f}% desde máximo reciente con RSI descendiendo ({last_rsi:.0f}). Comprando corrección."
-                        amount_to_invest = free_quote_now * (invest_pct_ranging / 100.0)
+                        reason = f"PULLBACK LATERAL: Precio cayó {pullback_pct:.1f}% desde máximo reciente con RSI girando al alza ({last_rsi:.0f}). Entrada quirúrgica de reversión."
+                        amount_to_invest = free_quote_now * (pair_invest_pct_ranging / 100.0)
                     else:
                         distancia_fondo = (current_price - last_bb_lower) if current_price else 0
                         reason = (
-                            f"MERCADO LATERAL: Sigo dormido ({range_confirmations}/5). "
+                            f"MERCADO LATERAL: Sigo dormido ({range_confirmations}/6). "
                             f"Esperaré mejor descuento ({distancia_fondo:.0f} hacia BB inferior) y confirmación de flujo comprador."
                         )
         else:
@@ -919,14 +1439,16 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 macd_cross_down = last_macd < last_macd_signal
             
             # Evaluar Break-Even Dinámico
-            dynamic_stop_loss = stop_loss
-            if max_pnl_pct >= 1.5:
-                # Si llegó a ganar +1.5%, el Stop Loss se vuelve +0.1% (Break-Even)
+            dynamic_stop_loss = pair_stop_loss
+            if max_pnl_pct >= 1.4:
+                # Si llegó a ganar +1.4%, el Stop Loss se vuelve +0.1% (Break-Even más paciente)
                 dynamic_stop_loss = -0.1
+
+            weak_momentum = bool(macd_cross_down and (last_gap < prev_gap) and (last_vol_balance < 1.00))
 
             # Evaluar Time-Stop (usa P&L neto para no salir con pérdida real por fees)
             is_time_stop = False
-            if trade_duration_hours >= 6.0 and pnl_pct_net > -stop_loss and pnl_pct_net < 1.0 and not is_trending:
+            if trade_duration_hours >= 9.0 and pnl_pct_net > -pair_stop_loss and pnl_pct_net < 0.8 and not is_trending and weak_momentum:
                 is_time_stop = True
 
             # Evaluar Technical Stop (Pánico Estructural multi-régimen)
@@ -945,12 +1467,23 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
 
             # Evaluar Trailing Stop
             is_trailing_stop = False
-            if max_pnl_pct >= trailing_activation and pnl_pct <= (max_pnl_pct - trailing_distance):
+            if max_pnl_pct >= pair_trailing_activation and pnl_pct <= (max_pnl_pct - pair_trailing_distance):
                 is_trailing_stop = True
+
+            hold_bars = int((trade_duration_hours * 60.0) / max(1, _timeframe_to_minutes(timeframe)))
+            is_roi_exit = False
+            for bar_thresh in sorted(roi_table.keys(), reverse=True):
+                if hold_bars >= int(bar_thresh):
+                    if pnl_pct_net >= float(roi_table[bar_thresh]):
+                        is_roi_exit = True
+                    break
 
             # ═══ Condiciones de venta (priorizadas) ═══
             partial_sell = False  # True = vender solo 50% (TP1 parcial)
-            if is_trailing_stop:
+            if is_roi_exit:
+                signal = "sell"
+                reason = f"ROI temporal cumplido: salida con {pnl_pct_net:.2f}% neto tras {hold_bars} velas para asegurar beneficio."
+            elif is_trailing_stop:
                 signal = "sell"
                 reason = f"Asegurador activado (Trailing Stop): Vendí al caer a {pnl_pct_net:.2f}% neto luego de rozar tu máximo de +{max_pnl_pct:.2f}%. ¡Ganancia salvada!"
             elif is_technical_stop:
@@ -961,32 +1494,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 if dynamic_stop_loss == -0.1:
                     reason = f"Break-Even activado: Me escapé protegiendo el trade en {pnl_pct_net:.2f}% neto. El máximo llegó a +{max_pnl_pct:.2f}%."
                 else:
-                    reason = f"Stop Loss Duro Superado: Amputando la herida de un tirón para salvar saldo. (P&L neto: {pnl_pct_net:.2f}% <= -{stop_loss}%)"
+                    reason = f"Stop Loss Duro Superado: Amputando la herida de un tirón para salvar saldo. (P&L neto: {pnl_pct_net:.2f}% <= -{pair_stop_loss:.2f}%)"
             elif is_time_stop:
                 signal = "sell"
                 reason = f"Desesperación: No hizo nada interesante en {trade_duration_hours:.1f} horas. Liberando saldo con {pnl_pct_net:.2f}% neto para invertirse mejor."
             elif not is_trending and last_rsi > 65 and current_price >= last_bb_mid and pnl_pct_net > 0:
                 # Mean Reversion Exit: RSI alto + sobre BB media + en profit neto
                 signal = "sell"
-                if not partial_exit_done:
-                    partial_sell = True  # TP1: vender 50%, dejar 50% correr con trailing
-                    reason = f"TP1 parcial (50%): RSI alto ({last_rsi:.0f}) tocando banda media con {pnl_pct_net:.2f}% neto. Asegurando mitad, dejando correr el resto."
-                else:
-                    reason = f"Ganancia de rango lateral asegurada (TP2 100%): {pnl_pct_net:.2f}% neto y RSI alto ({last_rsi:.0f}). Salgamos rápido."
-            elif not is_trending and current_price >= last_donch_mid and current_price >= last_fib_382 and pnl_pct_net > 0.4:
+                reason = f"Take profit completo de rango: RSI alto ({last_rsi:.0f}) en banda media con {pnl_pct_net:.2f}% neto. Cierre total para reducir arrastre por fees."
+            elif not is_trending and current_price >= last_donch_mid and current_price >= last_fib_382 and pnl_pct_net > 0.5:
                 signal = "sell"
                 reason = (
                     f"Take profit de rango por confluencia Donchian+Fibo: "
                     f"precio recuperó zona media/alta con {pnl_pct_net:.2f}% neto."
                 )
-            elif pnl_pct_net > 3.0 and (last_gap < prev_gap or macd_cross_down):
+            elif pnl_pct_net > 2.0 and (last_gap < prev_gap or macd_cross_down):
                 signal = "sell"
-                if not partial_exit_done:
-                    partial_sell = True
-                    reason = f"TP1 parcial (50%): Take Profit +{pnl_pct_net:.2f}% neto cazando el tope. Asegurando mitad."
-                else:
-                    reason = f"¡Felicitaciones! Cerramos Take Profit en +{pnl_pct_net:.2f}% neto cazando el tope. El MACD empezó a oler a techo."
-            elif macd_cross_down and pnl_pct_net > 1.5:
+                reason = f"Take Profit completo en +{pnl_pct_net:.2f}% neto cazando el tope. Cierre total para optimizar beneficio neto."
+            elif macd_cross_down and pnl_pct_net > 1.0:
                 signal = "sell"
                 reason = f"Venta preventiva de mal tiempo: Asegurando un bonito +{pnl_pct_net:.2f}% neto porque el MACD dice que viene lluvia en ventas."
             elif pnl_pct_net > 2.0 and current_price >= last_donch_upper and last_vol_balance < 0.95:
@@ -998,6 +1523,28 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             else:
                 sl_label = f"Escudo Break-Even activo para resguardar (sale en +0.1%)" if dynamic_stop_loss == -0.1 else f"Red abajo: -{stop_loss}%"
                 reason = f"En Operación (Hold): Llevamos {pnl_pct_net:.2f}% neto al momento. Techo rozado en la carrera: +{max_pnl_pct:.2f}%. {sl_label}."
+
+        # Guard rail global: si el gate está activo, invalida únicamente nuevas compras.
+        if signal == "buy":
+            edge_score = float(pair_score_map.get(pair, 0.0) or 0.0)
+            if edge_score < min_edge_score_to_buy:
+                signal = "hold"
+                reason = (
+                    f"EDGE-FILTER: compra bloqueada en {pair}. score={edge_score:.3f} "
+                    f"< umbral {min_edge_score_to_buy:.3f}"
+                )
+                amount_to_invest = 0.0
+
+        if signal == "buy" and buys_blocked_by_risk_gate:
+            signal = "hold"
+            reason = "RISK-GATE: compra bloqueada. " + " | ".join(buy_gate_reasons)
+            amount_to_invest = 0.0
+
+        # Guard rail por par: bloquea compras cuando el par no muestra edge reciente.
+        if signal == "buy" and pair_buy_blocked:
+            signal = "hold"
+            reason = pair_block_reason
+            amount_to_invest = 0.0
 
         confidence_val = 0.0
         if signal == "buy":
@@ -1052,7 +1599,7 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 f"donch_l={last_donch_lower:.4f} donch_m={last_donch_mid:.4f} donch_u={last_donch_upper:.4f} "
                 f"fib382={last_fib_382:.4f} fib500={last_fib_500:.4f} fib618={last_fib_618:.4f} "
                 f"vol={last_volume:.4f} vol_avg={last_vol_avg:.4f} vol_balance={last_vol_balance:.4f} "
-                f"vwap={last_vwap:.4f} daily_open={last_daily_open:.4f} macro_uptrend={macro_uptrend} "
+                f"vwap={last_vwap:.4f} daily_open={last_daily_open:.4f} macro_level={macro_level} "
                 f"holdings={portfolio_ctx.get('holdings', 0.0):.8f} avg_entry={portfolio_ctx.get('avg_entry_price', 0.0):.6f} "
                 f"pnl_pct={portfolio_ctx.get('pnl_pct', 0.0):.4f} pnl_usdt={portfolio_ctx.get('pnl_usdt', 0.0):.4f} "
                 f"history_buys={portfolio_ctx.get('total_trades_buy', 0)} history_sells={portfolio_ctx.get('total_trades_sell', 0)}"
@@ -1145,6 +1692,24 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 user_logger.warning("La estrategia no especificó monto válido para comprar %s (amount_usdt=%.4f).", pair, amount_usdt)
                 errors_this_cycle.append(f"{pair}: monto inválido para compra")
                 continue
+
+            # Presupuesto dinámico por ciclo y por par (allocator autónomo)
+            if allocator_enabled:
+                remaining_cycle_budget = max(0.0, cycle_buy_budget_usdt - cycle_budget_spent_usdt)
+                pair_weight = float(pair_budget_weights.get(pair, 0.0) or 0.0)
+                pair_budget_cap = cycle_buy_budget_usdt * pair_weight
+                remaining_pair_budget = max(0.0, pair_budget_cap - pair_budget_spent_usdt[pair])
+
+                capped_amount = min(amount_usdt, remaining_cycle_budget, remaining_pair_budget)
+                if capped_amount < amount_usdt:
+                    user_logger.info(
+                        "Allocator ajusta compra %s: solicitado=%.4f cap_cycle=%.4f cap_pair=%.4f -> final=%.4f USDT",
+                        pair, amount_usdt, remaining_cycle_budget, remaining_pair_budget, capped_amount,
+                    )
+                amount_usdt = capped_amount
+                if amount_usdt < 1.0:
+                    user_logger.info("Allocator sin presupuesto útil para %s en este ciclo. Se omite compra.", pair)
+                    continue
 
             # Verificar saldo (virtual en test mode, real en producción)
             free_quote_now = 0.0
@@ -1291,6 +1856,13 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                     _get_effective_balance(user.id, balance_now, test_mode)
                 ))
 
+            if signal_data["signal"] == "buy" and trade_amount and trade_price:
+                spent_usdt = float(trade_amount) * float(trade_price)
+                cycle_budget_spent_usdt += spent_usdt
+                pair_budget_spent_usdt[pair] += spent_usdt
+            elif signal_data["signal"] == "sell":
+                _pair_trade_cooldown_until[(user.id, pair)] = get_colombia_time() + timedelta(minutes=pair_trade_cooldown_minutes)
+
             # Telegram para la orden
             balance_after = await asyncio.to_thread(_fetch_balance, exchange, pairs, user_logger)
             await asyncio.to_thread(_send_telegram_for_user, user, (
@@ -1343,7 +1915,11 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
     )
 
     # Telegram: Resumen del ciclo y señales integradas en un único panel
-    _profile_label = f"🌙 {risk_profile} (nocturno)" if _schedule_active else f"☀️ {risk_profile}"
+    if adaptive_mode_enabled and adaptive_profiles_used:
+        dominant_profile = Counter(adaptive_profiles_used).most_common(1)[0][0]
+        _profile_label = f"🤖 auto:{dominant_profile}"
+    else:
+        _profile_label = f"🌙 {risk_profile} (nocturno)" if _schedule_active else f"☀️ {risk_profile}"
     
     summary_lines = [
         f"📋 <b>Resumen del Ciclo #{cycle_count}</b>",

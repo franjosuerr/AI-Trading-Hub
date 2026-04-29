@@ -58,6 +58,15 @@ def auto_migrate_db():
         ("schedule_start_hour", "INTEGER DEFAULT 22"),
         ("schedule_end_hour", "INTEGER DEFAULT 6"),
         ("schedule_risk_profile", "VARCHAR DEFAULT 'suave'"),
+        ("fee_rate", "FLOAT DEFAULT 0.1"),
+        ("prod_gate_enabled", "BOOLEAN DEFAULT 1"),
+        ("prod_gate_lookback_days", "INTEGER DEFAULT 7"),
+        ("prod_gate_min_trades", "INTEGER DEFAULT 8"),
+        ("prod_gate_min_win_rate", "FLOAT DEFAULT 48.0"),
+        ("prod_gate_min_net_profit_pct", "FLOAT DEFAULT 0.0"),
+        ("prod_gate_max_drawdown_pct", "FLOAT DEFAULT 3.0"),
+        ("daily_loss_limit_pct", "FLOAT DEFAULT 1.5"),
+        ("weekly_loss_limit_pct", "FLOAT DEFAULT 4.0"),
     ]
 
     for col_name, col_def in user_columns:

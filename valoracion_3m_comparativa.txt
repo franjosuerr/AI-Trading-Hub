@@ -1,0 +1,26 @@
+COMPARATIVA 3M - ANTES VS DESPUES (2025-01 a 2025-03)
+====================================================
+
+Resultado global:
+- Antes (promedio):
+  - Suave:       ret -3.10% | trades 82  | PF 0.57
+  - Conservador: ret -5.29% | trades 162 | PF 0.63
+  - Agresivo:    ret -8.49% | trades 337 | PF 0.71
+- Despues (mejorado_auto):
+  - ret -1.52% | trades 65 | PF 0.72
+
+Lectura principal:
+- Mejora relevante en retorno global (de -3.10% a -1.52% vs baseline suave).
+- Se redujo la sobreoperacion de forma fuerte (82 -> 65 trades vs baseline suave).
+- PF sube respecto a suave (0.57 -> 0.72), pero sigue por debajo de 1.0.
+
+Por activo (despues):
+- BTC: ret -0.49% | PF 0.97 | n=22  -> casi break-even.
+- ETH: ret -3.37% | PF 0.27 | n=20  -> sigue destruyendo edge.
+- SOL: ret -0.70% | PF 0.92 | n=23  -> casi break-even.
+
+Accion recomendada inmediata:
+1) Activar bloqueo fuerte para ETH (buy disabled temporal) hasta recuperar PF rolling >= 0.95.
+2) Mantener BTC y SOL con gate actual y size defensivo.
+3) Subir exigencia de entrada en ETH (confirmaciones + filtro macro) antes de reactivar.
+4) Volver a correr 3M tras bloquear ETH para validar si se cruza a retorno positivo global.
