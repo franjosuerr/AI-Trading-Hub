@@ -50,7 +50,7 @@ STOP_LOSS_PERCENT = float(os.getenv("STOP_LOSS_PERCENT", "2.0"))
 
 # --- Logs: ruta y rotación ---
 # Directorio donde se guardan los archivos de log (se crea si no existe)
-LOG_DIR = os.getenv("LOG_DIR", "logs").strip() or "logs"
+LOG_DIR = os.getenv("LOG_DIR", "/data/logs").strip() or "/data/logs"
 # Nombre base del archivo (sin extensión; la extensión .log se añade)
 LOG_FILE = os.getenv("LOG_FILE", "trading_bot.log").strip().replace(".log", "").replace(".LOG", "") or "trading_bot"
 # Si True, se genera un archivo por día (rotación a medianoche); si False, rotación por tamaño
