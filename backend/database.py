@@ -3,10 +3,11 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
-# Crear directorio data si no existe
-os.makedirs("data", exist_ok=True)
+# Crear directorio data si no existe (usa /data en Render, local fallback)
+_db_dir = os.getenv("DB_DIR", "/data")
+os.makedirs(_db_dir, exist_ok=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/trading_bot.db")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_db_dir}/trading_bot.db")
 
 engine = create_engine(
     DATABASE_URL, connect_args={"check_same_thread": False}
