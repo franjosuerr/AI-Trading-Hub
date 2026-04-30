@@ -1248,6 +1248,9 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
             elif active_risk_profile == "agresivo": rsi_rango_threshold = 34
             elif active_risk_profile == "muy_agresivo": rsi_rango_threshold = 36
 
+            # Pre-compute momentum_recovery before regime blocks (used in BEAR and RANGO)
+            momentum_recovery = indicators_dict.get("macd_line", 0) >= indicators_dict.get("macd_signal", 0)
+
             if regime == "BULL":
                 # ═══ ESTRATEGIA TENDENCIAL BULL: Pullback a EMA ═══
                 strategy_name = "Trend Following - Bull"
@@ -1319,7 +1322,6 @@ async def _run_trading_cycle(exchange, user, config, pairs, user_logger, cycle_c
                 is_at_bb_lower = current_price is not None and current_price <= last_bb_lower
                 is_at_donch_floor = current_price is not None and current_price <= (last_donch_lower * 1.002)
                 is_deep_fib = current_price is not None and current_price <= last_fib_618
-                momentum_recovery = indicators_dict.get("macd_line", 0) >= indicators_dict.get("macd_signal", 0)
                 rsi_turning_bear = last_rsi > rsi_prev_bear
                 vol_spike_bear = (len(df) >= 6 and
                     float(df["volume"].iloc[-1]) > float(df["volume"].iloc[-6:-1].mean()) * 1.15)
